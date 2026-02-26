@@ -417,6 +417,18 @@ export default function Settings() {
                 </SelectContent>
               </Select>
             </div>
+            <div className="flex items-center justify-between rounded-md border p-3">
+              <div className="space-y-1">
+                <Label>关闭生图水印</Label>
+                <p className="text-xs text-muted-foreground">
+                  开启后会向 SeedDream / Nano Banana 请求 `watermark=false` 及 `logo_info.add_logo=false`
+                </p>
+              </div>
+              <Switch
+                checked={cv(settings, "disable_generation_watermark", "1") === "1"}
+                onCheckedChange={(v) => set("disable_generation_watermark", v ? "1" : "0")}
+              />
+            </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>默认提示词前缀</Label>

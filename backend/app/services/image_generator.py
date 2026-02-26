@@ -29,6 +29,7 @@ class APIYiImageClient:
         api_url: str = "",
         seedream_model: str = "",
         nanobanana_model: str = "nano-banana-pro",
+        disable_watermark: bool = True,
     ):
         self.api_key = api_key or app_settings.APIYI_API_KEY
         self.api_url = (api_url or app_settings.APIYI_API_URL).rstrip("/")
@@ -37,6 +38,24 @@ class APIYiImageClient:
         self.nanobanana_model = (nanobanana_model or "nano-banana-pro").strip()
         self.seedream_size = "1440x2560"  # Seedream 当前渠道要求 >= 3686400 像素，9:16 最小可用
         self.nanobanana_size = "576x1024"
+        self.disable_watermark = disable_watermark
+
+    def _apply_watermark_options(self, payload: dict):
+        """
+        按平台兼容格式添加去水印参数：
+        - Seedream: watermark=false
+        - Drawing API: logo_info.add_logo=false
+        """
+        if not self.disable_watermark:
+            return
+
+        payload["watermark"] = False
+        payload["logo_info"] = {
+            "add_logo": False,
+            "position": 0,
+            "language": 0,
+            "opacity": 0.3,
+        }
 
     async def generate_image(
         self,
@@ -108,6 +127,7 @@ class APIYiImageClient:
                 "size": self.seedream_size,
                 "n": 1,
             }
+            self._apply_watermark_options(payload)
 
             # Seedream 支持 data URI 参考图（测试可用）
             if ref_b64:
@@ -132,6 +152,7 @@ class APIYiImageClient:
             "size": self.nanobanana_size,
             "n": 1,
         }
+        self._apply_watermark_options(payload)
         return await self._call_api(headers, payload, output_path)
 
     async def _call_api(self, headers: dict, payload: dict, output_path: str) -> bool:
@@ -143,6 +164,25 @@ class APIYiImageClient:
                     json=payload,
                     headers=headers,
                 )
+
+                # 某些模型端点不识别 watermark/logo_info，自动降级重试一次
+                if (
+                    resp.status_code in (400, 422)
+                    and ("watermark" in payload or "logo_info" in payload)
+                ):
+                    fallback_payload = {
+                        k: v for k, v in payload.items() if k not in ("watermark", "logo_info")
+                    }
+                    logger.warning(
+                        "模型可能不支持去水印参数，尝试兼容重试 | model=%s | status=%s",
+                        payload.get("model"),
+                        resp.status_code,
+                    )
+                    resp = await client.post(
+                        f"{self.api_url}/v1/images/generations",
+                        json=fallback_payload,
+                        headers=headers,
+                    )
 
                 if resp.status_code != 200:
                     logger.error(
@@ -226,6 +266,7 @@ class ConcurrentImageGenerator:
         api_key: str = "",
         seedream_model: str = "",
         nanobanana_model: str = "nano-banana-pro",
+        disable_watermark: bool = True,
         initial_concurrency: int = 10,
         max_concurrency: int = 50,
         max_retries: int = 2,
@@ -234,6 +275,7 @@ class ConcurrentImageGenerator:
             api_key=api_key,
             seedream_model=seedream_model,
             nanobanana_model=nanobanana_model,
+            disable_watermark=disable_watermark,
         )
         self.initial_concurrency = initial_concurrency
         self.max_concurrency = max_concurrency

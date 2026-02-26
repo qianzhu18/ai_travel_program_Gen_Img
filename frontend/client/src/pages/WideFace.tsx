@@ -20,6 +20,10 @@ interface WideFaceImage {
 // 宽脸图适用人群类型：在原5类基础上补充幼女(C01)
 const SINGLE_CROWD_TYPE_IDS = ["C01", "C02", "C03", "C04", "C06", "C07"] as const;
 
+function isWideFaceCompleted(item: TemplateItem): boolean {
+  return item.wide_face_status === "completed" && !!item.wide_face_path;
+}
+
 /** 将 TemplateItem[] 映射为 WideFaceImage[] */
 function templatesToImages(items: TemplateItem[]): WideFaceImage[] {
   return items.map((item) => ({
@@ -62,8 +66,10 @@ export default function WideFace() {
           const filtered = result.items.filter((t) =>
             SINGLE_CROWD_TYPE_IDS.includes(t.crowd_type as (typeof SINGLE_CROWD_TYPE_IDS)[number]),
           );
-          if (filtered.length > 0) {
-            const mapped = templatesToImages(filtered);
+          // 已有宽脸图的模板不应占据“宽脸图生成”工作区
+          const pending = filtered.filter((t) => !isWideFaceCompleted(t));
+          if (pending.length > 0) {
+            const mapped = templatesToImages(pending);
             setImages(mapped);
             setDisplayedImages(mapped.map((img) => img.id));
             setLoading(false);
@@ -94,17 +100,24 @@ export default function WideFace() {
       const filtered = result.items.filter((t) =>
         SINGLE_CROWD_TYPE_IDS.includes(t.crowd_type as (typeof SINGLE_CROWD_TYPE_IDS)[number]),
       );
-      const latest = templatesToImages(filtered);
+      const latestMap = new Map(filtered.map((item) => [item.id, item] as const));
       setImages((prev) => {
-        const selectedMap = new Map(prev.map((img) => [img.id, img.selected]));
-        const merged = latest.map((img) => ({
-          ...img,
-          selected: selectedMap.get(img.id) ?? true,
-        }));
+        const merged = prev
+          .map((img) => {
+            const updated = latestMap.get(img.id);
+            if (!updated) return null;
+            return {
+              ...img,
+              crowdType: updated.crowd_name,
+              wideFaceUrl: updated.wide_face_path ? toFileUrl(updated.wide_face_path) : "",
+              wideFaceStatus: updated.wide_face_status,
+            };
+          })
+          .filter((img): img is WideFaceImage => img !== null);
         setIsAllSelected(merged.length > 0 && merged.every((img) => img.selected));
+        setDisplayedImages(merged.map((img) => img.id));
         return merged;
       });
-      setDisplayedImages(latest.map((img) => img.id));
     } catch { /* ignore */ }
   };
 
@@ -165,7 +178,7 @@ export default function WideFace() {
       return;
     }
 
-    const needGen = images.filter((img) => !img.wideFaceUrl);
+    const needGen = images.filter((img) => !img.wideFaceUrl && img.wideFaceStatus !== "processing");
     if (needGen.length === 0) {
       toast.info("所有图片都已生成宽脸图");
       return;
@@ -289,6 +302,7 @@ export default function WideFace() {
               <p className="text-muted-foreground text-lg">
                 {loading ? "正在加载..." : "点击\"开始生成宽脸图\"按钮生成图片"}
               </p>
+              {!loading && <p className="text-sm text-muted-foreground mt-2">选用库中暂无待生成宽脸图</p>}
             </div>
           </div>
         ) : (

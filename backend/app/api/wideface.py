@@ -46,6 +46,9 @@ async def _async_wideface_generate(template_ids: list[str], engine: str):
         wideface_prompt = get_setting_value(
             db, "wideface_prompt", ""
         ) or settings.WIDEFACE_SYSTEM_PROMPT
+        disable_generation_watermark = (
+            get_setting_value(db, "disable_generation_watermark", "1").strip() != "0"
+        )
 
         templates = db.query(TemplateImage).filter(
             TemplateImage.id.in_(template_ids),
@@ -58,7 +61,10 @@ async def _async_wideface_generate(template_ids: list[str], engine: str):
         total = len(templates)
         ps.init(TASK_TYPE, TASK_KEY, total, f"开始宽脸图生成: {total} 张, 引擎={engine}")
 
-        generator = ConcurrentImageGenerator(api_key=api_key)
+        generator = ConcurrentImageGenerator(
+            api_key=api_key,
+            disable_watermark=disable_generation_watermark,
+        )
         completed = 0
         failed = 0
 

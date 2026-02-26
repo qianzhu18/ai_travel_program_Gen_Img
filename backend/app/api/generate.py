@@ -46,6 +46,9 @@ async def _async_batch_generate(batch_id: str, engine: str):
         api_key = get_setting_value(db, "apiyi_api_key", "") or settings.APIYI_API_KEY
         seedream_model = get_setting_value(db, "generate_model_version", "seedream-4-5-251128")
         nanobanana_model = get_setting_value(db, "nanobanana_model_version", "nano-banana-pro")
+        disable_generation_watermark = (
+            get_setting_value(db, "disable_generation_watermark", "1").strip() != "0"
+        )
 
         # 查询所有待生成任务
         tasks = db.query(GenerateTask).join(BaseImage).filter(
@@ -88,6 +91,7 @@ async def _async_batch_generate(batch_id: str, engine: str):
             api_key=api_key,
             seedream_model=seedream_model,
             nanobanana_model=nanobanana_model,
+            disable_watermark=disable_generation_watermark,
         )
         completed_count = 0
         failed_count = 0
