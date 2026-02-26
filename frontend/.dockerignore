@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.cache/
+*.bak
+*.bak2
+*.bak3
+
+# IDE
+.vscode/
+.idea/
+
+# Docker（避免递归）
+Dockerfile
+.dockerignore

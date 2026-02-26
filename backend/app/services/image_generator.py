@@ -1,0 +1,300 @@
+"""
+图片生成服务 - 对接 API易平台 (SeedDream 4.5 / Nano Banana Pro)
+
+支持:
+- SeedDream 4.5: 高质量人物写真生成
+- Nano Banana Pro: 快速风格化生成
+- 智能并发控制 + 失败重试
+"""
+import asyncio
+import base64
+import logging
+from pathlib import Path
+from typing import Optional
+
+import cv2
+import httpx
+
+from app.core.config import settings as app_settings
+
+logger = logging.getLogger(__name__)
+
+
+class APIYiImageClient:
+    """API易平台图片生成客户端"""
+
+    def __init__(
+        self,
+        api_key: str = "",
+        api_url: str = "",
+        seedream_model: str = "",
+        nanobanana_model: str = "nano-banana-pro",
+    ):
+        self.api_key = api_key or app_settings.APIYI_API_KEY
+        self.api_url = (api_url or app_settings.APIYI_API_URL).rstrip("/")
+        self.timeout = 240.0  # 单图超时240秒
+        self.seedream_model = (seedream_model or "seedream-4-5-251128").strip()
+        self.nanobanana_model = (nanobanana_model or "nano-banana-pro").strip()
+        self.seedream_size = "1440x2560"  # Seedream 当前渠道要求 >= 3686400 像素，9:16 最小可用
+        self.nanobanana_size = "576x1024"
+
+    async def generate_image(
+        self,
+        engine: str,
+        prompt: str,
+        negative_prompt: str = "",
+        reference_image_path: str = "",
+        reference_weight: int = 80,
+        output_path: str = "",
+    ) -> bool:
+        """
+        生成单张图片
+
+        Args:
+            engine: "seedream" 或 "nanobanana"
+            prompt: 正向提示词
+            negative_prompt: 负向提示词
+            reference_image_path: 参考底图路径（用于风格参考）
+            reference_weight: 参考图权重 0-100
+            output_path: 输出图片路径
+
+        Returns:
+            是否成功
+        """
+        if not self.api_key:
+            raise ValueError("API易 API Key 未配置")
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        # 读取参考图片
+        ref_b64 = ""
+        if reference_image_path and Path(reference_image_path).exists():
+            image = cv2.imread(reference_image_path)
+            if image is not None:
+                _, buf = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 90])
+                ref_b64 = base64.b64encode(buf.tobytes()).decode("utf-8")
+
+        if engine == "seedream":
+            return await self._generate_seedream(
+                headers, prompt, negative_prompt, ref_b64, reference_weight, output_path
+            )
+        elif engine == "nanobanana":
+            return await self._generate_nanobanana(
+                headers, prompt, negative_prompt, ref_b64, reference_weight, output_path
+            )
+        else:
+            raise ValueError(f"不支持的引擎: {engine}")
+
+    async def _generate_seedream(
+        self, headers: dict, prompt: str, negative_prompt: str,
+        ref_b64: str, ref_weight: int, output_path: str,
+    ) -> bool:
+        """Seedream 生图（OpenAI-compatible 参数）"""
+        models = [self.seedream_model, "seedream-4-5-251128", "seedream-4.5"]
+        tried = set()
+
+        for model in models:
+            if not model or model in tried:
+                continue
+            tried.add(model)
+
+            payload = {
+                "model": model,
+                "prompt": prompt,
+                "negative_prompt": negative_prompt,
+                "size": self.seedream_size,
+                "n": 1,
+            }
+
+            # Seedream 支持 data URI 参考图（测试可用）
+            if ref_b64:
+                payload["image"] = f"data:image/jpeg;base64,{ref_b64}"
+                payload["reference_strength"] = round(max(0, min(100, ref_weight)) / 100.0, 2)
+
+            if await self._call_api(headers, payload, output_path):
+                return True
+
+        return False
+
+    async def _generate_nanobanana(
+        self, headers: dict, prompt: str, negative_prompt: str,
+        ref_b64: str, ref_weight: int, output_path: str,
+    ) -> bool:
+        """Nano Banana Pro 生图"""
+        _ = (ref_b64, ref_weight)  # 该模型当前渠道的 image 入参稳定性差，先走文本生图
+        payload = {
+            "model": self.nanobanana_model,
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+            "size": self.nanobanana_size,
+            "n": 1,
+        }
+        return await self._call_api(headers, payload, output_path)
+
+    async def _call_api(self, headers: dict, payload: dict, output_path: str) -> bool:
+        """调用 API易 生图接口并保存结果"""
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                resp = await client.post(
+                    f"{self.api_url}/v1/images/generations",
+                    json=payload,
+                    headers=headers,
+                )
+
+                if resp.status_code != 200:
+                    logger.error(
+                        "API易生图失败: HTTP %s | model=%s | size=%s | %s",
+                        resp.status_code,
+                        payload.get("model"),
+                        payload.get("size"),
+                        resp.text[:300],
+                    )
+                    return False
+
+                data = resp.json()
+
+                # 解析结果图片
+                img_bytes = self._extract_image(data)
+                if img_bytes is None:
+                    return False
+
+                # 保存图片
+                Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+                Path(output_path).write_bytes(img_bytes)
+
+                logger.info(f"生图成功: {output_path}")
+                return True
+
+        except httpx.TimeoutException:
+            logger.error(f"API易生图超时 ({self.timeout}s)")
+            return False
+        except httpx.RequestError as e:
+            logger.error(f"API易生图网络错误: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"API易生图异常: {e}")
+            return False
+
+    def _extract_image(self, data: dict) -> Optional[bytes]:
+        """从 API 响应中提取图片数据"""
+        # 尝试多种响应格式
+        results = data.get("output", {}).get("results", [])
+        if not results:
+            results = data.get("data", [])
+
+        if not results:
+            logger.error(f"API易返回空结果: {data}")
+            return None
+
+        item = results[0]
+        if isinstance(item, dict):
+            b64 = item.get("b64_image") or item.get("b64_json", "")
+            url = item.get("url", "")
+        else:
+            b64 = ""
+            url = str(item)
+
+        if b64:
+            return base64.b64decode(b64)
+        elif url:
+            # 同步下载（在 async 上下文中）
+            import httpx as httpx_sync
+            try:
+                resp = httpx_sync.get(url, timeout=30.0)
+                return resp.content
+            except Exception as e:
+                logger.error(f"下载生成图片失败: {e}")
+                return None
+        else:
+            logger.error("API易返回无图片数据")
+            return None
+
+
+class ConcurrentImageGenerator:
+    """
+    并发图片生成器
+    - 初始10线程，动态调整，最大50线程
+    - 单图超时240秒
+    - 失败自动重试2次
+    """
+
+    def __init__(
+        self,
+        api_key: str = "",
+        seedream_model: str = "",
+        nanobanana_model: str = "nano-banana-pro",
+        initial_concurrency: int = 10,
+        max_concurrency: int = 50,
+        max_retries: int = 2,
+    ):
+        self.client = APIYiImageClient(
+            api_key=api_key,
+            seedream_model=seedream_model,
+            nanobanana_model=nanobanana_model,
+        )
+        self.initial_concurrency = initial_concurrency
+        self.max_concurrency = max_concurrency
+        self.max_retries = max_retries
+        self._semaphore = asyncio.Semaphore(initial_concurrency)
+        self._current_concurrency = initial_concurrency
+        self._success_streak = 0
+        self._fail_streak = 0
+
+    def _adjust_concurrency(self, success: bool):
+        """动态调整并发数"""
+        if success:
+            self._success_streak += 1
+            self._fail_streak = 0
+            # 连续成功10次，增加并发
+            if self._success_streak >= 10 and self._current_concurrency < self.max_concurrency:
+                self._current_concurrency = min(
+                    self._current_concurrency + 5, self.max_concurrency
+                )
+                self._semaphore = asyncio.Semaphore(self._current_concurrency)
+                self._success_streak = 0
+                logger.info(f"并发数提升至 {self._current_concurrency}")
+        else:
+            self._fail_streak += 1
+            self._success_streak = 0
+            # 连续失败3次，降低并发
+            if self._fail_streak >= 3 and self._current_concurrency > 5:
+                self._current_concurrency = max(self._current_concurrency - 5, 5)
+                self._semaphore = asyncio.Semaphore(self._current_concurrency)
+                self._fail_streak = 0
+                logger.info(f"并发数降低至 {self._current_concurrency}")
+
+    async def generate_single_with_retry(
+        self,
+        engine: str,
+        prompt: str,
+        negative_prompt: str,
+        reference_image_path: str,
+        reference_weight: int,
+        output_path: str,
+    ) -> bool:
+        """带重试的单图生成"""
+        async with self._semaphore:
+            for attempt in range(self.max_retries + 1):
+                success = await self.client.generate_image(
+                    engine=engine,
+                    prompt=prompt,
+                    negative_prompt=negative_prompt,
+                    reference_image_path=reference_image_path,
+                    reference_weight=reference_weight,
+                    output_path=output_path,
+                )
+
+                if success:
+                    self._adjust_concurrency(True)
+                    return True
+
+                if attempt < self.max_retries:
+                    wait = (attempt + 1) * 2
+                    logger.warning(f"生图失败，{wait}s 后重试 ({attempt+1}/{self.max_retries})")
+                    await asyncio.sleep(wait)
+
+            self._adjust_concurrency(False)
+            return False

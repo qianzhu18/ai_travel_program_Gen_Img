@@ -1,0 +1,75 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 环境变量
+.env
+
+# 数据文件
+data/uploads/*
+data/processed/*
+data/generated/*
+data/selected/*
+data/pending/*
+data/upscaled/*
+data/trash/*
+data/database.db
+!data/.gitkeep
+
+# AI模型文件（体积太大）
+models/lama/*.pth
+models/lama/*.ckpt
+models/lama/*.pt
+
+# Node
+node_modules/
+dist/
+.cache/
+
+# 日志
+logs/*.log
+logs/
+backend/data/*
+!backend/data/.gitkeep
+data/
+.ignore/
+.skill/
+.tmp/
+.sesskey
+可行性分析/
+*.bat
+
+# 临时文件
+*.bak
+*.bak2
+*.bak3
+*.fixed
+*.fixed2
+nul
+
+# 备份和pencil文件
+*.pen.bak*
+*.pen.fixed*
+
+# 安全与文档资产（按要求不推送）
+.docs/
+可行性分析/AccessKey.txt
+batch_photo_generate/
+*.md
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+artifacts-*

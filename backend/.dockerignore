@@ -1,0 +1,26 @@
+# 排除不需要的文件
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+
+# 数据文件（运行时通过 volume 挂载）
+data/
+models/
+
+# 环境 & 备份
+.env
+*.bak
+*.bak2
+*.bak3
+
+# IDE
+.vscode/
+.idea/
+
+# Docker（避免递归）
+Dockerfile
+.dockerignore

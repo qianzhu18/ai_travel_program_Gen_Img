@@ -1,0 +1,323 @@
+"""
+批量生图API路由
+- 异步后台批量生图 + 进度轮询
+- 智能并发控制
+- 失败重试
+- 完成后自动进入审核队列
+"""
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from sqlalchemy import func
+from pathlib import Path
+from datetime import datetime
+import asyncio
+import threading
+import logging
+
+from app.core.database import get_db, SessionLocal
+from app.core.config import settings
+from app.core.settings_resolver import get_setting_value
+from app.core.constants import CROWD_TYPES
+from app.schemas.common import GenerateRequest, BaseResponse
+from app.models.database import BaseImage, GenerateTask, TemplateImage, Batch
+from app.services import progress_store as ps
+
+logger = logging.getLogger(__name__)
+router = APIRouter()
+
+TASK_TYPE = "generate"
+
+
+def _run_generate_background(batch_id: str, engine: str):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(_async_batch_generate(batch_id, engine))
+    finally:
+        loop.close()
+
+
+async def _async_batch_generate(batch_id: str, engine: str):
+    """异步批量生图核心逻辑"""
+    db = SessionLocal()
+    try:
+        from app.services.image_generator import ConcurrentImageGenerator
+
+        api_key = get_setting_value(db, "apiyi_api_key", "") or settings.APIYI_API_KEY
+        seedream_model = get_setting_value(db, "generate_model_version", "seedream-4-5-251128")
+        nanobanana_model = get_setting_value(db, "nanobanana_model_version", "nano-banana-pro")
+
+        # 查询所有待生成任务
+        tasks = db.query(GenerateTask).join(BaseImage).filter(
+            BaseImage.batch_id == batch_id,
+            GenerateTask.status.in_(["pending", "failed"]),
+        ).all()
+
+        if not tasks:
+            ps.finish(TASK_TYPE, batch_id, 0, 0, "没有待生成的任务", per_image={})
+            return
+
+        total = len(tasks)
+
+        # 按底图分组统计
+        image_task_map = {}
+        for t in tasks:
+            if t.base_image_id not in image_task_map:
+                img = db.query(BaseImage).filter(BaseImage.id == t.base_image_id).first()
+                image_task_map[t.base_image_id] = {
+                    "filename": img.filename if img else "unknown",
+                    "total": 0, "completed": 0, "failed": 0,
+                }
+            image_task_map[t.base_image_id]["total"] += 1
+
+        per_image = {
+            img_id: {**info, "progress": 0}
+            for img_id, info in image_task_map.items()
+        }
+
+        ps.init(TASK_TYPE, batch_id, total,
+                f"开始批量生图: {total} 个任务, 引擎={engine}",
+                per_image=per_image)
+
+        # 标记为 processing
+        for t in tasks:
+            t.status = "processing"
+        db.commit()
+
+        generator = ConcurrentImageGenerator(
+            api_key=api_key,
+            seedream_model=seedream_model,
+            nanobanana_model=nanobanana_model,
+        )
+        completed_count = 0
+        failed_count = 0
+
+        # 并发生成
+        sem = asyncio.Semaphore(10)
+
+        async def process_task(task_obj):
+            nonlocal completed_count, failed_count
+
+            async with sem:
+                task_id = task_obj.id
+                img_id = task_obj.base_image_id
+
+                # 获取底图路径
+                task_db = SessionLocal()
+                try:
+                    t = task_db.query(GenerateTask).filter(GenerateTask.id == task_id).first()
+                    img = task_db.query(BaseImage).filter(BaseImage.id == img_id).first()
+                    if not t or not img:
+                        return
+
+                    ref_path = img.processed_path or img.original_path
+                    output_filename = f"{task_id}_{t.crowd_type}_{t.style_name}.jpg"
+                    output_path = str(settings.GENERATED_DIR / output_filename)
+
+                    task_engine = engine or t.ai_engine or settings.IMAGE_GENERATION_ENGINE
+
+                    success = await generator.generate_single_with_retry(
+                        engine=task_engine,
+                        prompt=t.prompt or "",
+                        negative_prompt=t.negative_prompt or "",
+                        reference_image_path=ref_path,
+                        reference_weight=80,
+                        output_path=output_path,
+                    )
+
+                    if success:
+                        t.status = "completed"
+                        t.result_path = output_path
+                        t.complete_time = datetime.utcnow()
+                        t.review_status = "pending_review"
+                        completed_count += 1
+
+                        # 自动创建模板图记录（进入审核队列）
+                        template_img = TemplateImage(
+                            generate_task_id=t.id,
+                            crowd_type=t.crowd_type,
+                            style_name=t.style_name,
+                            original_path=output_path,
+                            final_status="selected",
+                        )
+                        task_db.add(template_img)
+
+                        # 更新 per_image 进度
+                        pi = per_image.get(img_id, {})
+                        pi["completed"] = pi.get("completed", 0) + 1
+                        pi["progress"] = int(pi["completed"] / pi.get("total", 1) * 100)
+
+                    else:
+                        t.status = "failed"
+                        t.retry_count += 1
+                        failed_count += 1
+
+                        pi = per_image.get(img_id, {})
+                        pi["failed"] = pi.get("failed", 0) + 1
+
+                    task_db.commit()
+
+                finally:
+                    task_db.close()
+
+                # 更新总进度
+                done = completed_count + failed_count
+                progress = int(done / total * 100)
+
+                ct_name = CROWD_TYPES.get(task_obj.crowd_type, task_obj.crowd_type)
+                status_str = "[OK]" if success else "[FAIL]"
+
+                current = ps.get(TASK_TYPE, batch_id)
+                current.update({
+                    "progress": progress,
+                    "completed": completed_count,
+                    "failed": failed_count,
+                    "per_image": per_image,
+                })
+                logs = current.get("logs", [])
+                logs.append(f"{status_str} {ct_name}-{task_obj.style_name}")
+                current["logs"] = logs
+                ps.set(TASK_TYPE, batch_id, current)
+
+        # 并发执行���有任务
+        await asyncio.gather(*[process_task(t) for t in tasks])
+
+        # 更新批次状态
+        batch = db.query(Batch).filter(Batch.id == batch_id).first()
+        if batch:
+            batch.status = "completed" if failed_count == 0 else "ongoing"
+            db.commit()
+
+        ps.finish(TASK_TYPE, batch_id, completed_count, failed_count,
+                  f"批量生图完成！成功 {completed_count} 张，失败 {failed_count} 张",
+                  per_image=per_image)
+
+    except Exception as e:
+        logger.error(f"批量生图失败 {batch_id}: {e}")
+        ps.fail(TASK_TYPE, batch_id, f"生图出错: {str(e)}")
+    finally:
+        db.close()
+
+
+@router.post("/start", response_model=BaseResponse)
+async def start_generation(request: GenerateRequest, db: Session = Depends(get_db)):
+    """
+    开始批量生图任务（异步后台）
+    - 并发调用 SeedDream 4.5 / Nano Banana Pro
+    - 智能并发控制 (10-50线程)
+    - 失败自动重试2次
+    """
+    batch = db.query(Batch).filter(Batch.id == request.batch_id).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="批次不存在")
+
+    if ps.is_running(TASK_TYPE, request.batch_id):
+        return BaseResponse(code=1, message="该批次正在生图中")
+
+    # 统计待生成任务
+    pending = db.query(GenerateTask).join(BaseImage).filter(
+        BaseImage.batch_id == request.batch_id,
+        GenerateTask.status.in_(["pending", "failed"]),
+    ).count()
+
+    if pending == 0:
+        return BaseResponse(code=1, message="没有待生成的任务，请先生成提示词")
+
+    engine = (
+        request.engine
+        or get_setting_value(db, "generate_engine", settings.IMAGE_GENERATION_ENGINE)
+        or settings.IMAGE_GENERATION_ENGINE
+    )
+
+    t = threading.Thread(
+        target=_run_generate_background,
+        args=(request.batch_id, engine),
+        daemon=True,
+    )
+    t.start()
+
+    return BaseResponse(code=0, message="批量生图已启动", data={
+        "batch_id": request.batch_id,
+        "pending_count": pending,
+        "engine": engine,
+    })
+
+
+@router.get("/progress/{batch_id}", response_model=BaseResponse)
+async def get_progress(batch_id: str):
+    """获取生图任务进度（含每张底图独立进度）"""
+    data = ps.get(TASK_TYPE, batch_id)
+    return BaseResponse(code=0, data=data)
+
+
+@router.post("/retry", response_model=BaseResponse)
+async def retry_failed(request: GenerateRequest, db: Session = Depends(get_db)):
+    """重试失败的生图任务"""
+    failed_tasks = db.query(GenerateTask).join(BaseImage).filter(
+        BaseImage.batch_id == request.batch_id,
+        GenerateTask.status == "failed",
+    ).all()
+
+    if not failed_tasks:
+        return BaseResponse(code=1, message="没有失败的任务")
+
+    # 重置状态为 pending
+    for t in failed_tasks:
+        t.status = "pending"
+    db.commit()
+
+    engine = (
+        request.engine
+        or get_setting_value(db, "generate_engine", settings.IMAGE_GENERATION_ENGINE)
+        or settings.IMAGE_GENERATION_ENGINE
+    )
+
+    t = threading.Thread(
+        target=_run_generate_background,
+        args=(request.batch_id, engine),
+        daemon=True,
+    )
+    t.start()
+
+    return BaseResponse(code=0, message=f"正在重试 {len(failed_tasks)} 个失败任务", data={
+        "retry_count": len(failed_tasks),
+    })
+
+
+@router.get("/overview/{batch_id}", response_model=BaseResponse)
+async def get_overview(batch_id: str, db: Session = Depends(get_db)):
+    """获取生图任务概览"""
+    base_count = db.query(func.count(BaseImage.id)).filter(
+        BaseImage.batch_id == batch_id,
+        BaseImage.status == "completed",
+    ).scalar()
+
+    total_tasks = db.query(func.count(GenerateTask.id)).join(BaseImage).filter(
+        BaseImage.batch_id == batch_id,
+    ).scalar()
+
+    completed_tasks = db.query(func.count(GenerateTask.id)).join(BaseImage).filter(
+        BaseImage.batch_id == batch_id,
+        GenerateTask.status == "completed",
+    ).scalar()
+
+    failed_tasks = db.query(func.count(GenerateTask.id)).join(BaseImage).filter(
+        BaseImage.batch_id == batch_id,
+        GenerateTask.status == "failed",
+    ).scalar()
+
+    pending_tasks = db.query(func.count(GenerateTask.id)).join(BaseImage).filter(
+        BaseImage.batch_id == batch_id,
+        GenerateTask.status == "pending",
+    ).scalar()
+
+    return BaseResponse(code=0, data={
+        "base_images": base_count,
+        "crowd_types": 19,
+        "styles_per_type": 5,
+        "total_tasks": total_tasks,
+        "completed": completed_tasks,
+        "failed": failed_tasks,
+        "pending": pending_tasks,
+        "progress": int(completed_tasks / total_tasks * 100) if total_tasks > 0 else 0,
+    })

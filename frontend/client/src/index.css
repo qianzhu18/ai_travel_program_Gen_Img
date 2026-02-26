@@ -1,0 +1,312 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:is(.dark *));
+
+/* 
+ * Design System: Soft Professionalism
+ * Primary: #E89A8D (粉色)
+ * Background: #F5F5F5 / #FFFFFF
+ * Text: #333333 / #666666 / #999999
+ */
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  
+  /* Custom colors for AI Image Generator */
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+:root {
+  /* Primary - 粉色主题 */
+  --primary: oklch(0.72 0.12 15);
+  --primary-foreground: oklch(1 0 0);
+  
+  /* Sidebar */
+  --sidebar: oklch(1 0 0);
+  --sidebar-foreground: oklch(0.4 0.01 250);
+  --sidebar-primary: oklch(0.72 0.12 15);
+  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(0.97 0.02 15);
+  --sidebar-accent-foreground: oklch(0.72 0.12 15);
+  --sidebar-border: oklch(0.92 0.01 250);
+  --sidebar-ring: oklch(0.72 0.12 15);
+  
+  /* Chart colors */
+  --chart-1: oklch(0.72 0.12 15);
+  --chart-2: oklch(0.65 0.15 15);
+  --chart-3: oklch(0.58 0.12 15);
+  --chart-4: oklch(0.50 0.10 15);
+  --chart-5: oklch(0.45 0.08 15);
+  
+  /* Base */
+  --radius: 0.5rem;
+  --background: oklch(0.97 0.005 250);
+  --foreground: oklch(0.25 0.01 250);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.25 0.01 250);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.25 0.01 250);
+  --secondary: oklch(0.97 0.005 250);
+  --secondary-foreground: oklch(0.4 0.01 250);
+  --muted: oklch(0.97 0.005 250);
+  --muted-foreground: oklch(0.55 0.01 250);
+  --accent: oklch(0.97 0.02 15);
+  --accent-foreground: oklch(0.72 0.12 15);
+  --destructive: oklch(0.55 0.2 25);
+  --destructive-foreground: oklch(1 0 0);
+  --border: oklch(0.90 0.005 250);
+  --input: oklch(0.90 0.005 250);
+  --ring: oklch(0.72 0.12 15);
+}
+
+.dark {
+  --primary: oklch(0.75 0.12 15);
+  --primary-foreground: oklch(0.15 0.01 250);
+  --sidebar-primary: oklch(0.75 0.12 15);
+  --sidebar-primary-foreground: oklch(0.15 0.01 250);
+  --background: oklch(0.15 0.01 250);
+  --foreground: oklch(0.9 0.005 250);
+  --card: oklch(0.2 0.01 250);
+  --card-foreground: oklch(0.9 0.005 250);
+  --popover: oklch(0.2 0.01 250);
+  --popover-foreground: oklch(0.9 0.005 250);
+  --secondary: oklch(0.25 0.01 250);
+  --secondary-foreground: oklch(0.75 0.005 250);
+  --muted: oklch(0.28 0.01 250);
+  --muted-foreground: oklch(0.65 0.01 250);
+  --accent: oklch(0.28 0.02 15);
+  --accent-foreground: oklch(0.9 0.005 250);
+  --destructive: oklch(0.65 0.2 25);
+  --destructive-foreground: oklch(1 0 0);
+  --border: oklch(0.3 0.01 250);
+  --input: oklch(0.3 0.01 250);
+  --ring: oklch(0.75 0.12 15);
+  --chart-1: oklch(0.75 0.12 15);
+  --chart-2: oklch(0.68 0.15 15);
+  --chart-3: oklch(0.60 0.12 15);
+  --chart-4: oklch(0.52 0.10 15);
+  --chart-5: oklch(0.48 0.08 15);
+  --sidebar: oklch(0.2 0.01 250);
+  --sidebar-foreground: oklch(0.9 0.005 250);
+  --sidebar-accent: oklch(0.28 0.02 15);
+  --sidebar-accent-foreground: oklch(0.9 0.005 250);
+  --sidebar-border: oklch(0.3 0.01 250);
+  --sidebar-ring: oklch(0.75 0.12 15);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  [type="button"]:not(:disabled),
+  [type="submit"]:not(:disabled),
+  [type="reset"]:not(:disabled),
+  a[href],
+  select:not(:disabled),
+  input[type="checkbox"]:not(:disabled),
+  input[type="radio"]:not(:disabled) {
+    @apply cursor-pointer;
+  }
+}
+
+@layer components {
+  .container {
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  .flex {
+    min-height: 0;
+    min-width: 0;
+  }
+
+  @media (min-width: 640px) {
+    .container {
+      padding-left: 1.5rem;
+      padding-right: 1.5rem;
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .container {
+      padding-left: 2rem;
+      padding-right: 2rem;
+      max-width: 1280px;
+    }
+  }
+
+  /* Custom scrollbar */
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #ddd;
+    border-radius: 3px;
+  }
+  
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #ccc;
+  }
+
+  /* Card hover effect */
+  .card-hover {
+    @apply transition-all duration-200;
+  }
+  
+  .card-hover:hover {
+    @apply shadow-md -translate-y-0.5;
+  }
+
+  /* Navigation item styles */
+  .nav-item {
+    @apply flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-150;
+  }
+  
+  .nav-item-active {
+    @apply bg-accent text-accent-foreground;
+  }
+  
+  .nav-item-inactive {
+    @apply text-muted-foreground hover:bg-muted hover:text-foreground;
+  }
+
+  /* Tag filter styles */
+  .tag-filter {
+    @apply px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-150 cursor-pointer;
+  }
+  
+  .tag-filter-active {
+    @apply bg-accent text-accent-foreground;
+  }
+  
+  .tag-filter-inactive {
+    @apply bg-muted text-muted-foreground hover:bg-muted/80;
+  }
+
+  /* Image card styles */
+  .image-card {
+    @apply bg-card rounded-lg overflow-hidden border border-border transition-all duration-200;
+  }
+  
+  .image-card:hover {
+    @apply shadow-lg border-primary/30;
+  }
+
+  /* Progress bar styles */
+  .progress-bar {
+    @apply h-2 bg-muted rounded-full overflow-hidden;
+  }
+  
+  .progress-bar-fill {
+    @apply h-full bg-primary rounded-full transition-all duration-300;
+  }
+}
+
+@layer utilities {
+  /* Text colors matching design spec */
+  .text-title {
+    color: #333333;
+  }
+  
+  .text-body {
+    color: #666666;
+  }
+  
+  .text-hint {
+    color: #999999;
+  }
+
+  /* Background colors matching design spec */
+  .bg-page {
+    background-color: #F5F5F5;
+  }
+  
+  .bg-surface {
+    background-color: #FFFFFF;
+  }
+
+  /* Primary color utilities */
+  .bg-primary-main {
+    background-color: #E89A8D;
+  }
+  
+  .bg-primary-light {
+    background-color: #FDF2F0;
+  }
+  
+  .text-primary-main {
+    color: #E89A8D;
+  }
+  
+  .border-primary-main {
+    border-color: #E89A8D;
+  }
+
+  /* Indeterminate progress bar animation */
+  .animate-indeterminate {
+    width: 40%;
+    animation: indeterminate 1.4s ease-in-out infinite;
+  }
+}
+
+@keyframes indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  50% {
+    transform: translateX(150%);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
+}

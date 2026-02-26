@@ -1,0 +1,371 @@
+"""
+图片扩图服务 - 将图片扩展到目标比例 (默认 9:16)
+
+支持引擎:
+1. IOPaint outpainting (本地服务, 默认)
+2. API易平台 SeedDream 4.5 outpainting (云端API)
+3. OpenCV 边缘填充 (降级方案)
+"""
+import cv2
+import numpy as np
+import httpx
+import base64
+from pathlib import Path
+from typing import Optional
+import logging
+
+from app.services.watermark_remover import IOPaintClient
+from app.core.config import settings as app_settings
+
+logger = logging.getLogger(__name__)
+
+
+class APIYiOutpaintClient:
+    """API易平台 outpainting 客户端 (SeedDream 4.5)"""
+
+    def __init__(self, api_key: str = "", api_url: str = "https://api.apiyi.com"):
+        self.api_key = api_key or app_settings.APIYI_API_KEY
+        self.api_url = api_url.rstrip("/")
+        self.timeout = 120.0
+
+    async def outpaint(
+        self,
+        image: np.ndarray,
+        target_width: int,
+        target_height: int,
+    ) -> Optional[np.ndarray]:
+        """
+        调用 API易平台 SeedDream outpainting
+
+        Args:
+            image: BGR 格式输入图片
+            target_width: 目标宽度
+            target_height: 目标高度
+
+        Returns:
+            扩图后的 BGR 图片, 失败返回 None
+        """
+        if not self.api_key:
+            logger.warning("API易 API Key 未配置，跳过云端扩图")
+            return None
+
+        # 编码图片为 base64
+        _, img_buf = cv2.imencode(".png", image)
+        img_b64 = base64.b64encode(img_buf.tobytes()).decode("utf-8")
+
+        h, w = image.shape[:2]
+
+        payload = {
+            "model": "seedream-4.5",
+            "input": {
+                "image": img_b64,
+                "function": "outpainting",
+                "output_image_ratio": f"{target_width}:{target_height}",
+            },
+            "parameters": {
+                "n": 1,
+            }
+        }
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                resp = await client.post(
+                    f"{self.api_url}/v1/images/generations",
+                    json=payload,
+                    headers=headers,
+                )
+
+                if resp.status_code != 200:
+                    logger.error(f"API易 outpaint 失败: HTTP {resp.status_code} - {resp.text[:300]}")
+                    return None
+
+                data = resp.json()
+
+                # 解析响应中的图片
+                results = data.get("output", {}).get("results", [])
+                if not results:
+                    results = data.get("data", [])
+
+                if not results:
+                    logger.error(f"API易 outpaint 返回空结果: {data}")
+                    return None
+
+                # 获取第一张结果图片 (base64 或 URL)
+                result_item = results[0]
+                if isinstance(result_item, dict):
+                    img_data = result_item.get("b64_image") or result_item.get("b64_json", "")
+                    img_url = result_item.get("url", "")
+                else:
+                    img_data = ""
+                    img_url = str(result_item)
+
+                if img_data:
+                    img_bytes = base64.b64decode(img_data)
+                elif img_url:
+                    # 下载图片
+                    async with httpx.AsyncClient(timeout=30.0) as dl_client:
+                        dl_resp = await dl_client.get(img_url)
+                        img_bytes = dl_resp.content
+                else:
+                    logger.error("API易 outpaint 返回无图片数据")
+                    return None
+
+                result_array = np.frombuffer(img_bytes, dtype=np.uint8)
+                result_image = cv2.imdecode(result_array, cv2.IMREAD_COLOR)
+
+                if result_image is None:
+                    logger.error("无法解码 API易 outpaint 返回的图片")
+                    return None
+
+                logger.info(f"API易 outpaint 成功: {w}x{h} -> {target_width}x{target_height}")
+                return result_image
+
+        except httpx.RequestError as e:
+            logger.error(f"API易 outpaint 网络错误: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"API易 outpaint 异常: {e}")
+            return None
+
+
+def crop_to_target_ratio(
+    input_path: str,
+    output_path: str,
+    target_ratio: tuple = (9, 16),
+    offset: float = 0.0,
+) -> bool:
+    """
+    将图片裁剪到目标宽高比 (纯 OpenCV，无需外部服务)
+
+    Args:
+        input_path: 输入图片路径
+        output_path: 输出图片路径
+        target_ratio: 目标宽高比 (width, height), 如 (9, 16)
+        offset: 裁剪偏移量 -1.0 ~ 1.0, 0 = 居中
+
+    Returns:
+        是否成功
+    """
+    try:
+        image = cv2.imread(input_path)
+        if image is None:
+            logger.error(f"无法读取图片: {input_path}")
+            return False
+
+        h, w = image.shape[:2]
+        target_w, target_h = target_ratio
+        current_ratio = w / h
+        target_ratio_val = target_w / target_h
+
+        # 如果已接近目标比例 (±5%), 直接复制
+        tolerance = 0.05 * target_ratio_val
+        if abs(current_ratio - target_ratio_val) < tolerance:
+            logger.info(f"图片比例已接近 {target_w}:{target_h}, 跳过裁剪")
+            if str(Path(input_path).resolve()) != str(Path(output_path).resolve()):
+                Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+                cv2.imwrite(output_path, image)
+            return True
+
+        # 计算裁剪区域
+        if current_ratio > target_ratio_val:
+            # 图片更宽 → 左右裁剪，保留完整高度
+            new_w = int(h * target_ratio_val)
+            new_h = h
+            max_offset = (w - new_w) // 2
+            cx = w // 2 + int(offset * max_offset)
+            x1 = max(0, cx - new_w // 2)
+            x1 = min(x1, w - new_w)
+            y1 = 0
+        else:
+            # 图片更高 → 上下裁剪，保留完整宽度
+            new_w = w
+            new_h = int(w / target_ratio_val)
+            max_offset = (h - new_h) // 2
+            cy = h // 2 + int(offset * max_offset)
+            y1 = max(0, cy - new_h // 2)
+            y1 = min(y1, h - new_h)
+            x1 = 0
+
+        cropped = image[y1:y1 + new_h, x1:x1 + new_w]
+
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(output_path, cropped)
+
+        logger.info(f"裁剪成功: {w}x{h} -> {new_w}x{new_h} (offset={offset:.2f})")
+        return True
+
+    except Exception as e:
+        logger.error(f"裁剪失败: {input_path}, 错误: {e}")
+        return False
+
+
+async def expand_to_target_ratio(
+    input_path: str,
+    output_path: str,
+    target_ratio: tuple = (9, 16),
+    engine: str = "auto",
+    iopaint_url: str = app_settings.IOPAINT_URL,
+    apiyi_api_key: str = "",
+    offset: float = 0.0,
+    allow_fallback: bool = True,
+) -> bool:
+    """
+    将图片扩展到目标宽高比
+
+    Args:
+        input_path: 输入图片路径
+        output_path: 输出图片路径
+        target_ratio: 目标宽高比 (width, height), 如 (9, 16)
+        engine: 扩图引擎 "auto" / "iopaint" / "seedream"
+                auto: 优先 IOPaint, 不可用则尝试 API易, 最后 OpenCV 降级
+        iopaint_url: IOPaint 服务地址
+        offset: 扩图偏移量 [-1, 1]，0=居中；正值表示上/左扩展更多
+
+    Returns:
+        是否成功
+    """
+    try:
+        image = cv2.imread(input_path)
+        if image is None:
+            logger.error(f"无法读取图片: {input_path}")
+            return False
+
+        h, w = image.shape[:2]
+        target_w, target_h = target_ratio
+        current_ratio = w / h
+        target_ratio_val = target_w / target_h
+
+        # 如果已接近目标比例 (±5%), 跳过
+        tolerance = 0.05 * target_ratio_val
+        if abs(current_ratio - target_ratio_val) < tolerance:
+            logger.info(
+                f"图片比例 {w}:{h} ({current_ratio:.3f}) "
+                f"已接近目标 {target_w}:{target_h} ({target_ratio_val:.3f}), 跳过扩图"
+            )
+            if str(Path(input_path).resolve()) != str(Path(output_path).resolve()):
+                Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+                cv2.imwrite(output_path, image)
+            return True
+
+        # 计算目标尺寸 (保留较大维度，扩展较小维度)
+        if current_ratio > target_ratio_val:
+            new_w = w
+            new_h = int(w / target_ratio_val)
+        else:
+            new_h = h
+            new_w = int(h * target_ratio_val)
+
+        logger.info(f"扩图: {w}x{h} -> {new_w}x{new_h} (目标比例 {target_w}:{target_h}, 引擎={engine})")
+
+        result_image = None
+
+        # 引擎选择
+        if engine in ("auto", "iopaint"):
+            result_image = await _try_iopaint(image, new_w, new_h, iopaint_url, offset=offset)
+
+        if result_image is None and engine in ("auto", "seedream"):
+            result_image = await _try_apiyi(image, new_w, new_h, apiyi_api_key)
+
+        if result_image is not None:
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(output_path, result_image)
+            logger.info(f"扩图成功: {input_path} -> {output_path} ({new_w}x{new_h})")
+            return True
+
+        # 所有AI引擎都失败
+        if not allow_fallback:
+            logger.error("AI扩图失败且已禁用降级方案")
+            return False
+
+        logger.warning("所有AI扩图引擎不可用，使用 OpenCV 边缘填充降级")
+        return _fallback_expand(image, output_path, new_w, new_h, offset=offset)
+
+    except Exception as e:
+        logger.error(f"扩图失败: {input_path}, 错误: {e}")
+        return False
+
+
+async def _try_iopaint(
+    image: np.ndarray,
+    target_width: int,
+    target_height: int,
+    iopaint_url: str,
+    offset: float = 0.0,
+) -> Optional[np.ndarray]:
+    """尝试使用 IOPaint outpainting"""
+    client = IOPaintClient(service_url=iopaint_url)
+    try:
+        return await client.outpaint(
+            image,
+            target_width=target_width,
+            target_height=target_height,
+            offset=offset,
+        )
+    except ConnectionError:
+        logger.info("IOPaint 服务不可用")
+        return None
+    except Exception as e:
+        logger.warning(f"IOPaint outpaint 失败: {e}")
+        return None
+    finally:
+        await client.close()
+
+
+async def _try_apiyi(
+    image: np.ndarray, target_width: int, target_height: int, api_key: str = ""
+) -> Optional[np.ndarray]:
+    """尝试使用 API易平台 SeedDream outpainting"""
+    client = APIYiOutpaintClient(api_key=api_key)
+    return await client.outpaint(image, target_width, target_height)
+
+
+def _fallback_expand(
+    image: np.ndarray,
+    output_path: str,
+    target_width: int,
+    target_height: int,
+    offset: float = 0.0,
+) -> bool:
+    """
+    降级方案: 当所有AI引擎不可用时，使用 OpenCV 边缘复制填充
+    """
+    try:
+        h, w = image.shape[:2]
+
+        # 正 offset 表示原图向下/右偏移，即上/左扩展更多
+        clamped = max(-1.0, min(1.0, float(offset)))
+
+        total_h = max(0, target_height - h)
+        total_w = max(0, target_width - w)
+
+        pad_top = int(round(total_h * (0.5 + clamped * 0.5)))
+        pad_top = max(0, min(total_h, pad_top))
+        pad_bottom = total_h - pad_top
+
+        pad_left = int(round(total_w * (0.5 + clamped * 0.5)))
+        pad_left = max(0, min(total_w, pad_left))
+        pad_right = total_w - pad_left
+
+        result = cv2.copyMakeBorder(
+            image,
+            pad_top, pad_bottom, pad_left, pad_right,
+            cv2.BORDER_REPLICATE,
+        )
+
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(output_path, result)
+
+        logger.info(
+            f"降级扩图完成: {w}x{h} -> {target_width}x{target_height} "
+            f"(offset={clamped:.2f}, top={pad_top}, bottom={pad_bottom}, left={pad_left}, right={pad_right})"
+        )
+        return True
+
+    except Exception as e:
+        logger.error(f"降级扩图失败: {e}")
+        return False

@@ -1,0 +1,60 @@
+services:
+  backend:
+    build: ./backend
+    container_name: photo-gen-backend
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Docker 内路径覆盖
+      DATABASE_URL: sqlite:////app/data/database.db
+      DATA_DIR: /app/data
+      DEFAULT_EXPORT_DIR: /app/data/exports
+      IOPAINT_URL: http://iopaint:8090
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models:ro
+    networks:
+      - app-net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  frontend:
+    build: ./frontend
+    container_name: photo-gen-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - app-net
+
+  # IOPaint 服务（可选，需要水印去除/扩图时启用）
+  # 启动方式: docker compose --profile iopaint up -d
+  iopaint:
+    build: ./iopaint_service
+    container_name: photo-gen-iopaint
+    restart: unless-stopped
+    profiles: ["iopaint"]
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models:ro
+    networks:
+      - app-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+networks:
+  app-net:
+    driver: bridge
