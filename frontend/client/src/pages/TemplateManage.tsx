@@ -51,6 +51,56 @@ const crowdTypes = [
   "父子(少年)", "父子(幼年)", "父女(少年)", "父女(幼年)",
 ];
 
+const CROWD_TYPE_ID_MAP: Record<string, string> = {
+  幼女: "C01",
+  少女: "C02",
+  熟女: "C03",
+  奶奶: "C04",
+  幼男: "C05",
+  少男: "C06",
+  大叔: "C07",
+  情侣: "C08",
+  闺蜜: "C09",
+  兄弟: "C10",
+  异性伙伴: "C11",
+  "母子(少年)": "C12",
+  "母子(青年)": "C13",
+  "母子(幼年)": "C13",
+  母子少年: "C12",
+  母子青年: "C13",
+  "母女(少年)": "C14",
+  "母女(青年)": "C15",
+  "母女(幼年)": "C15",
+  母女少年: "C14",
+  母女青年: "C15",
+  "父子(少年)": "C16",
+  "父子(青年)": "C17",
+  "父子(幼年)": "C17",
+  父子少年: "C16",
+  父子青年: "C17",
+  "父女(少年)": "C18",
+  "父女(青年)": "C19",
+  "父女(幼年)": "C19",
+  父女少年: "C18",
+  父女青年: "C19",
+};
+
+function normalizeCrowdName(name: string): string {
+  return name.trim().replace(/（/g, "(").replace(/）/g, ")").replace(/\s+/g, "");
+}
+
+function resolveCrowdTypeId(name: string): string {
+  const normalized = normalizeCrowdName(name);
+  return CROWD_TYPE_ID_MAP[normalized] || "";
+}
+
+function isSameCrowdType(left: string, right: string): boolean {
+  const leftId = resolveCrowdTypeId(left);
+  const rightId = resolveCrowdTypeId(right);
+  if (leftId && rightId) return leftId === rightId;
+  return normalizeCrowdName(left) === normalizeCrowdName(right);
+}
+
 
 /** Map TemplateItem[] from API to TemplateImage[] */
 function mapApiToTemplateImages(items: TemplateItem[]): TemplateImage[] {
@@ -85,6 +135,8 @@ function realId(id: string): string {
 export default function TemplateManage() {
   const [templates, setTemplates] = useState<TemplateImage[]>([]);
   const [loading, setLoading] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [isReplacing, setIsReplacing] = useState(false);
   const [currentView, setCurrentView] = useState<ViewType>("approved");
   const [selectedCrowdType, setSelectedCrowdType] = useState<string>("少女");
   const [previewImage, setPreviewImage] = useState<string | null>(null);
@@ -120,7 +172,7 @@ export default function TemplateManage() {
   }, [loadTemplates]);
 
   // ---- derived state ----
-  const filteredTemplates = templates.filter(t => t.crowdType === selectedCrowdType);
+  const filteredTemplates = templates.filter((t) => isSameCrowdType(t.crowdType, selectedCrowdType));
 
   // ---- actions ----
   const handleViewLarge = (url: string) => setPreviewImage(url);
@@ -220,17 +272,37 @@ export default function TemplateManage() {
 
   const handleUploadClick = () => fileInputRef.current?.click();
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
-    const newImages: TemplateImage[] = Array.from(files).map((file, index) => ({
-      id: `new_${Date.now()}_${index}`,
-      url: URL.createObjectURL(file),
-      crowdType: selectedCrowdType,
-    }));
-    setTemplates(prev => [...prev, ...newImages]);
-    toast.success(`已上传 ${files.length} 张图片到 ${selectedCrowdType} 分类`);
-    e.target.value = "";
+
+    const crowdTypeId = resolveCrowdTypeId(selectedCrowdType);
+    if (!crowdTypeId) {
+      toast.error(`无法识别人群类型: ${selectedCrowdType}`);
+      e.target.value = "";
+      return;
+    }
+
+    setIsUploading(true);
+    const toastId = toast.loading(`正在上传 ${files.length} 张图片...`);
+    try {
+      const result = await templateApi.upload(Array.from(files), crowdTypeId);
+      toast.dismiss(toastId);
+      if (result) {
+        if (result.failed_count > 0) {
+          toast.warning(`上传完成：成功 ${result.uploaded_count} 张，失败 ${result.failed_count} 张`);
+        } else {
+          toast.success(`已上传 ${result.uploaded_count} 张图片到 ${selectedCrowdType} 分类`);
+        }
+      }
+      await loadTemplates();
+    } catch {
+      toast.dismiss(toastId);
+      toast.error("上传失败，请重试");
+    } finally {
+      setIsUploading(false);
+      e.target.value = "";
+    }
   };
 
   const handleReplaceClick = (id: string) => {
@@ -238,14 +310,27 @@ export default function TemplateManage() {
     replaceInputRef.current?.click();
   };
 
-  const handleReplaceUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleReplaceUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !replaceTargetId) return;
-    const newUrl = URL.createObjectURL(file);
-    setTemplates(prev => prev.map(t => (t.id === replaceTargetId ? { ...t, url: newUrl } : t)));
-    toast.success("图片已替换");
-    setReplaceTargetId(null);
-    e.target.value = "";
+
+    const targetId = replaceTargetId;
+    const isWideFace = targetId.endsWith("_wide");
+    setIsReplacing(true);
+    const toastId = toast.loading("正在替换图片...");
+    try {
+      await templateApi.replace(realId(targetId), file, isWideFace);
+      toast.dismiss(toastId);
+      toast.success(isWideFace ? "宽脸图已替换" : "原图已替换（宽脸图需重新生成）");
+      await loadTemplates();
+    } catch {
+      toast.dismiss(toastId);
+      toast.error("替换失败，请重试");
+    } finally {
+      setIsReplacing(false);
+      setReplaceTargetId(null);
+      e.target.value = "";
+    }
   };
 
   // ---- render ----
@@ -431,9 +516,13 @@ export default function TemplateManage() {
               清空
             </Button>
           ) : (
-            <Button className="bg-primary hover:bg-primary/90 shadow-lg" onClick={handleUploadClick}>
+            <Button
+              className="bg-primary hover:bg-primary/90 shadow-lg"
+              onClick={handleUploadClick}
+              disabled={isUploading || isReplacing}
+            >
               <Upload className="w-4 h-4 mr-2" />
-              上传新图片
+              {isUploading ? "上传中..." : "上传新图片"}
             </Button>
           )}
         </div>

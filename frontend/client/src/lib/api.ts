@@ -415,6 +415,13 @@ export interface TemplateStats {
   crowd_stats: Record<string, { name: string; count: number }>;
 }
 
+export interface TemplateUploadResult {
+  items: TemplateItem[];
+  uploaded_count: number;
+  failed_count: number;
+  failed_files: { name: string; reason: string }[];
+}
+
 export const templateApi = {
   /** 获取模板列表 */
   list(params?: {
@@ -425,6 +432,30 @@ export const templateApi = {
   }) {
     return unwrap<{ items: TemplateItem[]; total: number; page: number; page_size: number }>(
       http.get(API.template.list, { params }),
+    );
+  },
+
+  /** 上传模板图到选用库 */
+  upload(files: File[], crowdType: string) {
+    const form = new FormData();
+    files.forEach((f) => form.append("files", f));
+    form.append("crowd_type", crowdType);
+    return unwrap<TemplateUploadResult>(
+      http.post(API.template.upload, form, {
+        headers: { "Content-Type": "multipart/form-data" },
+      }),
+    );
+  },
+
+  /** 替换模板图（原图/宽脸图） */
+  replace(templateId: string, file: File, isWideFace = false) {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("is_wide_face", String(isWideFace));
+    return unwrap<{ item: TemplateItem }>(
+      http.post(API.template.replace(templateId), form, {
+        headers: { "Content-Type": "multipart/form-data" },
+      }),
     );
   },
 

@@ -64,7 +64,7 @@ export default function WideFace() {
           if (filtered.length > 0) {
             const mapped = templatesToImages(filtered);
             setImages(mapped);
-            setDisplayedImages(mapped.filter((img) => img.wideFaceUrl).map((img) => img.id));
+            setDisplayedImages(mapped.map((img) => img.id));
             setLoading(false);
             return;
           }
@@ -91,17 +91,17 @@ export default function WideFace() {
       const result = await templateApi.list({ final_status: "selected", page_size: 500 });
       if (!result?.items) return;
       const filtered = result.items.filter((t) => SINGLE_TYPES.includes(t.crowd_name));
-      setImages((prev) =>
-        prev.map((img) => {
-          const updated = filtered.find((t) => t.id === img.id);
-          if (!updated) return img;
-          const newUrl = updated.wide_face_path ? toFileUrl(updated.wide_face_path) : "";
-          if (newUrl && !img.wideFaceUrl) {
-            setDisplayedImages((d) => d.includes(img.id) ? d : [...d, img.id]);
-          }
-          return { ...img, wideFaceUrl: newUrl, wideFaceStatus: updated.wide_face_status };
-        }),
-      );
+      const latest = templatesToImages(filtered);
+      setImages((prev) => {
+        const selectedMap = new Map(prev.map((img) => [img.id, img.selected]));
+        const merged = latest.map((img) => ({
+          ...img,
+          selected: selectedMap.get(img.id) ?? true,
+        }));
+        setIsAllSelected(merged.length > 0 && merged.every((img) => img.selected));
+        return merged;
+      });
+      setDisplayedImages(latest.map((img) => img.id));
     } catch { /* ignore */ }
   };
 

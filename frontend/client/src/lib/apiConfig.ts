@@ -50,6 +50,8 @@ export const API = {
   // ===== 模板管理 =====
   template: {
     list: `${API_BASE}/template/list`,
+    upload: `${API_BASE}/template/upload`,
+    replace: (id: string) => `${API_BASE}/template/replace/${id}`,
     move: `${API_BASE}/template/move`,
     batchMove: `${API_BASE}/template/batch-move`,
     delete: (id: string) => `${API_BASE}/template/delete/${id}`,
