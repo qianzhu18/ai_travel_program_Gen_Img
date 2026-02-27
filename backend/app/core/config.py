@@ -3,6 +3,7 @@
 """
 import os
 from pathlib import Path
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 # 项目根目录
@@ -15,6 +16,19 @@ class Settings(BaseSettings):
     APP_NAME: str = "AI图片批量生成系统"
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = False
+
+    @field_validator("DEBUG", mode="before")
+    @classmethod
+    def _normalize_debug(cls, value):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            v = value.strip().lower()
+            if v in {"1", "true", "yes", "on", "debug", "dev", "development"}:
+                return True
+            if v in {"0", "false", "no", "off", "release", "prod", "production", ""}:
+                return False
+        return False
 
     # 服务器配置
     HOST: str = "0.0.0.0"

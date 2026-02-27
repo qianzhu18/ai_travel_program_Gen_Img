@@ -164,6 +164,22 @@ function ensure_env_file() {
   fi
 }
 
+function normalize_debug_env() {
+  local current="${DEBUG:-}"
+  [[ -n "$current" ]] || return 0
+  local normalized
+  normalized="$(echo "$current" | tr '[:upper:]' '[:lower:]' | xargs)"
+  case "$normalized" in
+    1|0|true|false|yes|no|on|off|debug|dev|development|release|prod|production)
+      return 0
+      ;;
+    *)
+      warn "Detected unsupported DEBUG value from shell env: '$current'. Fallback to DEBUG=false for local startup."
+      export DEBUG=false
+      ;;
+  esac
+}
+
 function ensure_backend_deps() {
   need_cmd python3
   if [[ ! -x "$ROOT_DIR/.venv/bin/python" && "$NO_INSTALL" -eq 1 ]]; then
@@ -284,6 +300,7 @@ function decide_iopaint_mode() {
 }
 
 ensure_env_file
+normalize_debug_env
 ensure_backend_deps
 ensure_frontend_deps
 decide_iopaint_mode
@@ -291,9 +308,6 @@ decide_iopaint_mode
 if [[ "$USE_IOPAINT" == "1" ]]; then
   ensure_iopaint_deps
 fi
-
-log "Initializing database..."
-"$ROOT_DIR/.venv/bin/python" "$ROOT_DIR/scripts/init_db.py"
 
 start_backend
 wait_http "Backend" "http://127.0.0.1:${BACKEND_PORT}/health" 60 || {
