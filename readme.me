@@ -1,0 +1,35 @@
+AI 图片批量生成系统（Windows 一键启动说明）
+
+1) 项目放在哪都可以（桌面、D盘、下载目录都行）
+- 只要打开的是项目根目录即可。
+- 根目录里应看到这些文件夹：backend、frontend、scripts。
+
+2) 先配置密钥（可以让 AI 帮你）
+- 如果没有 .env：把 .env.example 复制成 .env。
+- 打开 .env，至少填写：
+  APIYI_API_KEY=你的_apiyi_key
+  BAILIAN_API_KEY=你的_bailian_key
+
+你可以把 .env.example 发给 AI，直接说：
+"请按这个模板生成 .env，只填 APIYI_API_KEY 和 BAILIAN_API_KEY，其他保持默认。"
+
+3) Windows 一键启动
+- 双击 start_local.cmd
+- 首次启动会自动安装依赖，时间会比较长（正常现象）
+- 成功后访问：
+  前端: http://localhost:3000
+  后端: http://localhost:8000
+
+4) Windows 一键停止
+- 双击 stop_local.cmd
+
+5) 常见问题
+- 3000 打不开：先双击 stop_local.cmd，再双击 start_local.cmd。
+- 提示缺少 Python/npm：先安装 Python 3.10+ 和 Node.js 18+（建议 LTS）。
+- 修改了 .env 后：先 stop 再 start。
+
+6) 给别人分发时
+- 直接把整个项目文件夹发过去（文件结构保持不变）。
+- 对方只需要：
+  1) 填 .env
+  2) 双击 start_local.cmd
