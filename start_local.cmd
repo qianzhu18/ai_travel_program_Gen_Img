@@ -19,6 +19,9 @@ if %errorlevel% neq 0 (
     pause
     exit /b 1
   )
+  set "PY_CMD=python"
+) else (
+  set "PY_CMD=py -3"
 )
 
 where npm >nul 2>nul
@@ -33,13 +36,17 @@ if not exist ".env" (
   if exist ".env.example" (
     copy /Y ".env.example" ".env" >nul
     echo [WARN] 未找到 .env，已从 .env.example 自动创建。
-    echo [WARN] 请先编辑 .env，填写 APIYI_API_KEY / BAILIAN_API_KEY，再重新运行。
-    pause
-    exit /b 1
   ) else (
     echo [ERROR] 缺少 .env 和 .env.example。
     pause
     exit /b 1
+  )
+)
+
+if exist "scripts\apply_access_keys.py" (
+  if exist "可行性分析\AccessKey.txt" (
+    echo [INFO] 检测到 可行性分析\AccessKey.txt，正在自动写入 .env ...
+    %PY_CMD% "scripts\apply_access_keys.py" --access-key-file "可行性分析\AccessKey.txt" --env-file ".env" --env-example ".env.example" --quiet
   )
 )
 

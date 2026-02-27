@@ -164,6 +164,24 @@ function ensure_env_file() {
   fi
 }
 
+function apply_access_keys_if_present() {
+  local access_file="$ROOT_DIR/可行性分析/AccessKey.txt"
+  local helper="$ROOT_DIR/scripts/apply_access_keys.py"
+  if [[ ! -f "$helper" ]]; then
+    return
+  fi
+  if [[ ! -f "$access_file" ]]; then
+    return
+  fi
+
+  log "Applying keys from 可行性分析/AccessKey.txt to .env ..."
+  python3 "$helper" \
+    --access-key-file "$access_file" \
+    --env-file "$ENV_FILE" \
+    --env-example "$ENV_EXAMPLE" \
+    --quiet || warn "apply_access_keys.py failed, continue with existing .env"
+}
+
 function normalize_debug_env() {
   local current="${DEBUG:-}"
   [[ -n "$current" ]] || return 0
@@ -300,6 +318,7 @@ function decide_iopaint_mode() {
 }
 
 ensure_env_file
+apply_access_keys_if_present
 normalize_debug_env
 ensure_backend_deps
 ensure_frontend_deps

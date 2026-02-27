@@ -1,35 +1,49 @@
-AI 图片批量生成系统（Windows 一键启动说明）
+AI 图片批量生成系统（Windows / Mac 一键启动说明）
 
-1) 项目放在哪都可以（桌面、D盘、下载目录都行）
-- 只要打开的是项目根目录即可。
-- 根目录里应看到这些文件夹：backend、frontend、scripts。
+目标：把整个项目文件夹发给别人后，对方只要准备好环境，结合 `可行性分析/AccessKey.txt` 就能一键启动。
 
-2) 先配置密钥（可以让 AI 帮你）
-- 如果没有 .env：把 .env.example 复制成 .env。
-- 打开 .env，至少填写：
-  APIYI_API_KEY=你的_apiyi_key
-  BAILIAN_API_KEY=你的_bailian_key
+1) 文件夹要求
+- 项目可放任意目录（桌面/D盘/下载目录均可）。
+- 必须保持目录结构不变，尤其是：
+  - `start_local.cmd` / `start_local.sh`
+  - `可行性分析/AccessKey.txt`
+  - `.env.example`
 
-你可以把 .env.example 发给 AI，直接说：
-"请按这个模板生成 .env，只填 APIYI_API_KEY 和 BAILIAN_API_KEY，其他保持默认。"
+2) 运行前准备
+- Windows：安装 Python 3.10+、Node.js 18+（LTS）。
+- Mac：安装 Python 3.10+、Node.js 18+（LTS）。
 
-3) Windows 一键启动
-- 双击 start_local.cmd
-- 首次启动会自动安装依赖，时间会比较长（正常现象）
-- 成功后访问：
-  前端: http://localhost:3000
-  后端: http://localhost:8000
+3) 密钥自动注入（已内置）
+- 启动脚本会自动执行：`scripts/apply_access_keys.py`
+- 会从 `可行性分析/AccessKey.txt` 提取并写入 `.env`（若 `.env` 不存在会先从 `.env.example` 创建）
+- 当前支持自动写入的键：
+  - `APIYI_API_KEY`
+  - `BAILIAN_API_KEY`
+  - `VOLC_ACCESS_KEY_ID`
+  - `VOLC_SECRET_ACCESS_KEY`
 
-4) Windows 一键停止
-- 双击 stop_local.cmd
+4) Windows 一键启动/停止
+- 启动：双击 `start_local.cmd`
+- 停止：双击 `stop_local.cmd`
+- 首次启动会自动安装依赖，耗时较长属正常
+- 启动后访问：
+  - 前端: `http://localhost:3000`
+  - 后端: `http://localhost:8000`
 
-5) 常见问题
-- 3000 打不开：先双击 stop_local.cmd，再双击 start_local.cmd。
-- 提示缺少 Python/npm：先安装 Python 3.10+ 和 Node.js 18+（建议 LTS）。
-- 修改了 .env 后：先 stop 再 start。
+5) Mac 一键启动/停止
+- 启动：`./start_local.sh`
+- 停止：`./stop_local.sh`
 
-6) 给别人分发时
-- 直接把整个项目文件夹发过去（文件结构保持不变）。
-- 对方只需要：
-  1) 填 .env
-  2) 双击 start_local.cmd
+6) 推荐给 AI 的一句话（给不会配环境的人）
+- 可直接把下面这句发给 AI（如 ChatGPT/Codex）：
+  - `请进入项目根目录，检查可行性分析/AccessKey.txt，自动写入 .env，然后执行一键启动脚本并检查 localhost:3000 和 localhost:8000 是否可用。`
+
+7) 常见问题
+- 3000/8000 打不开：先执行停止脚本，再重新启动。
+- 提示缺少 Python/npm：先安装后重试。
+- 生成失败但服务能打开：
+  - 查看 `.runtime/logs/backend.log`
+  - 重点关注：
+    - `insufficient_user_quota`（上游额度不足）
+    - `no_available_channel`（上游渠道不可用）
+    - `strict_no_watermark_cleanup_failed`（严格无水印校验失败）
