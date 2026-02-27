@@ -37,6 +37,7 @@ class WatermarkDetector:
         region: str = "bottom_right",
         margin_ratio: float = 0.15,
         manual_bbox: Optional[Tuple[int, int, int, int]] = None,
+        fallback_to_fixed: bool = True,
     ) -> np.ndarray:
         """
         主入口：根据模式返回二值 mask (255=水印区域, 0=保留区域)
@@ -59,13 +60,19 @@ class WatermarkDetector:
             return self.detect_full_scan(image)
         else:
             # auto 模式
-            return self.detect_auto(image, region, margin_ratio)
+            return self.detect_auto(
+                image,
+                region,
+                margin_ratio,
+                fallback_to_fixed=fallback_to_fixed,
+            )
 
     def detect_auto(
         self,
         image: np.ndarray,
         region: str = "bottom_right",
         margin_ratio: float = 0.15,
+        fallback_to_fixed: bool = True,
     ) -> np.ndarray:
         """
         OpenCV 智能检测：在候选区域内用边缘+轮廓分析精确定位水印
@@ -89,7 +96,9 @@ class WatermarkDetector:
 
         if roi.size == 0:
             logger.warning("候选区域为空，回退到固定区域模式")
-            return self.detect_fixed_region(image, region, margin_ratio)
+            if fallback_to_fixed:
+                return self.detect_fixed_region(image, region, margin_ratio)
+            return mask
 
         # 2. 灰度 + 高斯模糊
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
@@ -147,9 +156,12 @@ class WatermarkDetector:
             )
             return mask
 
-        # 8. 无检测结果，回退到固定区域
-        logger.info("智能检测未找到水印轮廓，回退到固定区域模式")
-        return self.detect_fixed_region(image, region, margin_ratio)
+        # 8. 无检测结果，按配置决定是否回退固定区域
+        if fallback_to_fixed:
+            logger.info("智能检测未找到水印轮廓，回退到固定区域模式")
+            return self.detect_fixed_region(image, region, margin_ratio)
+        logger.info("智能检测未找到水印轮廓，返回空掩码")
+        return mask
 
     def detect_fixed_region(
         self,

@@ -20,6 +20,19 @@ from app.core.config import settings as app_settings
 logger = logging.getLogger(__name__)
 
 
+def _normalize_watermark_engine(engine_name: str) -> str:
+    engine = (engine_name or "auto").strip().lower()
+    alias = {
+        "volcengine": "volc",
+        "volcano": "volc",
+        "local": "iopaint",
+    }
+    engine = alias.get(engine, engine)
+    if engine in ("auto", "iopaint", "volc", "opencv"):
+        return engine
+    return "auto"
+
+
 class APIYiImageClient:
     """API易平台图片生成客户端"""
 
@@ -39,6 +52,44 @@ class APIYiImageClient:
         self.seedream_size = "1440x2560"  # Seedream 当前渠道要求 >= 3686400 像素，9:16 最小可用
         self.nanobanana_size = "576x1024"
         self.disable_watermark = disable_watermark
+        self.last_error_code = ""
+        self.last_error_message = ""
+
+    def _reset_last_error(self):
+        self.last_error_code = ""
+        self.last_error_message = ""
+
+    def _record_error(self, status_code: int, message: str):
+        self.last_error_message = (message or "")[:500]
+        text = (message or "").lower()
+
+        if (
+            "insufficient_user_quota" in text
+            or "quota" in text and "not enough" in text
+            or "余额不足" in message
+        ):
+            self.last_error_code = "insufficient_user_quota"
+        elif "无可用渠道" in message or "no available channel" in text:
+            self.last_error_code = "no_available_channel"
+        elif status_code == 401:
+            self.last_error_code = "unauthorized"
+        elif status_code == 429:
+            self.last_error_code = "rate_limited"
+        elif status_code >= 500:
+            self.last_error_code = "upstream_server_error"
+        elif status_code == 0:
+            self.last_error_code = "request_error"
+        else:
+            self.last_error_code = f"http_{status_code}"
+
+    def _can_fallback_from_seedream(self) -> bool:
+        return self.last_error_code in {
+            "insufficient_user_quota",
+            "no_available_channel",
+            "rate_limited",
+            "upstream_server_error",
+            "request_error",
+        }
 
     def _apply_watermark_options(self, payload: dict):
         """
@@ -82,6 +133,7 @@ class APIYiImageClient:
         """
         if not self.api_key:
             raise ValueError("API易 API Key 未配置")
+        self._reset_last_error()
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -97,9 +149,23 @@ class APIYiImageClient:
                 ref_b64 = base64.b64encode(buf.tobytes()).decode("utf-8")
 
         if engine == "seedream":
-            return await self._generate_seedream(
+            ok = await self._generate_seedream(
                 headers, prompt, negative_prompt, ref_b64, reference_weight, output_path
             )
+            if ok:
+                return True
+
+            # Seedream 渠道/配额异常时自动降级到 NanoBanana，避免整批任务 0 产出
+            if self._can_fallback_from_seedream():
+                logger.warning(
+                    "Seedream 不可用（%s），自动降级到 %s",
+                    self.last_error_code or "unknown",
+                    self.nanobanana_model,
+                )
+                return await self._generate_nanobanana(
+                    headers, prompt, negative_prompt, ref_b64, reference_weight, output_path
+                )
+            return False
         elif engine == "nanobanana":
             return await self._generate_nanobanana(
                 headers, prompt, negative_prompt, ref_b64, reference_weight, output_path
@@ -192,6 +258,7 @@ class APIYiImageClient:
                         payload.get("size"),
                         resp.text[:300],
                     )
+                    self._record_error(resp.status_code, resp.text)
                     return False
 
                 data = resp.json()
@@ -199,6 +266,7 @@ class APIYiImageClient:
                 # 解析结果图片
                 img_bytes = self._extract_image(data)
                 if img_bytes is None:
+                    self._record_error(200, "empty_image_data")
                     return False
 
                 # 保存图片
@@ -210,12 +278,15 @@ class APIYiImageClient:
 
         except httpx.TimeoutException:
             logger.error(f"API易生图超时 ({self.timeout}s)")
+            self._record_error(0, "timeout")
             return False
         except httpx.RequestError as e:
             logger.error(f"API易生图网络错误: {e}")
+            self._record_error(0, str(e))
             return False
         except Exception as e:
             logger.error(f"API易生图异常: {e}")
+            self._record_error(0, str(e))
             return False
 
     def _extract_image(self, data: dict) -> Optional[bytes]:
@@ -269,6 +340,12 @@ class ConcurrentImageGenerator:
         disable_watermark: bool = True,
         strict_no_watermark: bool = True,
         watermark_cleanup_margin: float = 0.18,
+        watermark_engine: str = "auto",
+        iopaint_url: str = "",
+        volc_access_key_id: str = "",
+        volc_secret_access_key: str = "",
+        volc_region: str = "",
+        volc_service: str = "",
         initial_concurrency: int = 10,
         max_concurrency: int = 50,
         max_retries: int = 2,
@@ -281,6 +358,12 @@ class ConcurrentImageGenerator:
         )
         self.strict_no_watermark = strict_no_watermark
         self.watermark_cleanup_margin = max(0.08, min(0.35, float(watermark_cleanup_margin)))
+        self.watermark_engine = _normalize_watermark_engine(watermark_engine)
+        self.iopaint_url = (iopaint_url or app_settings.IOPAINT_URL).strip()
+        self.volc_access_key_id = (volc_access_key_id or "").strip()
+        self.volc_secret_access_key = (volc_secret_access_key or "").strip()
+        self.volc_region = (volc_region or app_settings.VOLC_REGION).strip()
+        self.volc_service = (volc_service or app_settings.VOLC_SERVICE).strip()
         self.initial_concurrency = initial_concurrency
         self.max_concurrency = max_concurrency
         self.max_retries = max_retries
@@ -365,8 +448,14 @@ class ConcurrentImageGenerator:
             from app.services.watermark_remover import WatermarkRemover
 
             self._watermark_remover = WatermarkRemover(
+                iopaint_url=self.iopaint_url,
                 detection_mode="fixed_region",
-                engine="auto",
+                engine=self.watermark_engine,
+                allow_local_fallback=True,
+                volc_access_key_id=self.volc_access_key_id,
+                volc_secret_access_key=self.volc_secret_access_key,
+                volc_region=self.volc_region,
+                volc_service=self.volc_service,
             )
             self._watermark_available = await self._watermark_remover.health_check()
         except Exception as e:

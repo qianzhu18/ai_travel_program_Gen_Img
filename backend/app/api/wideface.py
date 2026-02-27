@@ -26,6 +26,19 @@ TASK_TYPE = "wideface"
 TASK_KEY = "current"
 
 
+def _normalize_watermark_engine(engine_name: str) -> str:
+    engine = (engine_name or "auto").strip().lower()
+    alias = {
+        "volcengine": "volc",
+        "volcano": "volc",
+        "local": "iopaint",
+    }
+    engine = alias.get(engine, engine)
+    if engine in ("auto", "iopaint", "volc", "opencv"):
+        return engine
+    return "auto"
+
+
 def _run_wideface_background(template_ids: list[str], engine: str):
     """后台线程入口"""
     loop = asyncio.new_event_loop()
@@ -53,6 +66,13 @@ async def _async_wideface_generate(template_ids: list[str], engine: str):
         strict_no_watermark = (
             get_setting_value(db, "strict_no_watermark", "1").strip() != "0"
         )
+        watermark_engine = _normalize_watermark_engine(
+            get_setting_value(db, "watermark_engine", "auto")
+        )
+        volc_access_key_id = get_setting_value(db, "volc_access_key_id", "") or settings.VOLC_ACCESS_KEY_ID
+        volc_secret_access_key = (
+            get_setting_value(db, "volc_secret_access_key", "") or settings.VOLC_SECRET_ACCESS_KEY
+        )
 
         templates = db.query(TemplateImage).filter(
             TemplateImage.id.in_(template_ids),
@@ -69,6 +89,12 @@ async def _async_wideface_generate(template_ids: list[str], engine: str):
             api_key=api_key,
             disable_watermark=disable_generation_watermark,
             strict_no_watermark=strict_no_watermark,
+            watermark_engine=watermark_engine,
+            iopaint_url=settings.IOPAINT_URL,
+            volc_access_key_id=volc_access_key_id,
+            volc_secret_access_key=volc_secret_access_key,
+            volc_region=settings.VOLC_REGION,
+            volc_service=settings.VOLC_SERVICE,
         )
         completed = 0
         failed = 0

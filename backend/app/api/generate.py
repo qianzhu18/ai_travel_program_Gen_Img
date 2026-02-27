@@ -28,6 +28,19 @@ router = APIRouter()
 TASK_TYPE = "generate"
 
 
+def _normalize_watermark_engine(engine_name: str) -> str:
+    engine = (engine_name or "auto").strip().lower()
+    alias = {
+        "volcengine": "volc",
+        "volcano": "volc",
+        "local": "iopaint",
+    }
+    engine = alias.get(engine, engine)
+    if engine in ("auto", "iopaint", "volc", "opencv"):
+        return engine
+    return "auto"
+
+
 def _run_generate_background(batch_id: str, engine: str):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -52,6 +65,13 @@ async def _async_batch_generate(batch_id: str, engine: str):
         )
         strict_no_watermark = (
             get_setting_value(db, "strict_no_watermark", "1").strip() != "0"
+        )
+        watermark_engine = _normalize_watermark_engine(
+            get_setting_value(db, "watermark_engine", "auto")
+        )
+        volc_access_key_id = get_setting_value(db, "volc_access_key_id", "") or settings.VOLC_ACCESS_KEY_ID
+        volc_secret_access_key = (
+            get_setting_value(db, "volc_secret_access_key", "") or settings.VOLC_SECRET_ACCESS_KEY
         )
 
         # 查询所有待生成任务
@@ -92,6 +112,12 @@ async def _async_batch_generate(batch_id: str, engine: str):
             nanobanana_model=nanobanana_model,
             disable_watermark=disable_generation_watermark,
             strict_no_watermark=strict_no_watermark,
+            watermark_engine=watermark_engine,
+            iopaint_url=settings.IOPAINT_URL,
+            volc_access_key_id=volc_access_key_id,
+            volc_secret_access_key=volc_secret_access_key,
+            volc_region=settings.VOLC_REGION,
+            volc_service=settings.VOLC_SERVICE,
         )
         completed_count = 0
         failed_count = 0

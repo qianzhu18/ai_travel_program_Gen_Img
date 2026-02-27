@@ -217,6 +217,7 @@ class WatermarkRemover:
         detection_mode: str = "auto",
         sensitivity: float = 0.5,
         engine: str = "auto",
+        allow_local_fallback: bool = True,
         volc_access_key_id: str = settings.VOLC_ACCESS_KEY_ID,
         volc_secret_access_key: str = settings.VOLC_SECRET_ACCESS_KEY,
         volc_region: str = settings.VOLC_REGION,
@@ -225,6 +226,7 @@ class WatermarkRemover:
         self.detector = WatermarkDetector(sensitivity=sensitivity)
         self.detection_mode = detection_mode
         self.engine = engine
+        self.allow_local_fallback = allow_local_fallback
         self._volc_client = None
         self._iopaint_client = None
 
@@ -241,6 +243,13 @@ class WatermarkRemover:
         else:
             self._iopaint_client = IOPaintClient(service_url=iopaint_url)
 
+    @staticmethod
+    def _opencv_inpaint(image: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        """本地 OpenCV 兜底去水印（无需外部服务）"""
+        h, w = image.shape[:2]
+        radius = max(3, int(min(h, w) * 0.01))
+        return cv2.inpaint(image, mask, radius, cv2.INPAINT_TELEA)
+
     async def process_image(
         self,
         input_path: str,
@@ -249,6 +258,7 @@ class WatermarkRemover:
         mask_data: Optional[str] = None,
         region: str = "bottom_right",
         margin_ratio: float = 0.15,
+        fallback_to_fixed: bool = True,
     ) -> bool:
         """
         完整水印去除流程: 读取 → 检测 → IOPaint修复 → 保存
@@ -296,6 +306,7 @@ class WatermarkRemover:
                     region=region,
                     margin_ratio=margin_ratio,
                     manual_bbox=manual_bbox,
+                    fallback_to_fixed=fallback_to_fixed,
                 )
 
             # 检查 mask 是否有内容
@@ -305,21 +316,35 @@ class WatermarkRemover:
                 cv2.imwrite(output_path, image)
                 return True
 
-            # Volcengine 或 IOPaint 修复
+            # Volcengine / IOPaint / OpenCV 修复
+            result = None
             if self.engine == "volc":
                 if not self._volc_client:
                     logger.error("Volcengine client not initialized")
-                    return False
-                result = await self._volc_client.inpaint(image, mask)
-                if result is None:
-                    if self._volc_client.last_error:
+                else:
+                    result = await self._volc_client.inpaint(image, mask)
+                    if result is None and self._volc_client.last_error:
                         logger.error(f"Volcengine inpaint failed: {self._volc_client.last_error}")
-                    return False
+            elif self.engine == "opencv":
+                result = self._opencv_inpaint(image, mask)
             else:
                 if not self._iopaint_client:
                     logger.error("IOPaint client not initialized")
-                    return False
-                result = await self._iopaint_client.inpaint(image, mask)
+                else:
+                    try:
+                        result = await self._iopaint_client.inpaint(image, mask)
+                    except ConnectionError as e:
+                        logger.error(f"IOPaint 服务不可用: {e}")
+                    except Exception as e:
+                        logger.error(f"IOPaint 去水印失败: {e}")
+
+            if result is None and self.allow_local_fallback:
+                logger.warning("主去水印引擎不可用，已回退到本地 OpenCV 修复")
+                result = self._opencv_inpaint(image, mask)
+
+            if result is None:
+                logger.error("水印修复失败：所有可用引擎均不可用")
+                return False
 
             # 保存结果
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -328,19 +353,18 @@ class WatermarkRemover:
             logger.info(f"水印去除成功: {input_path} -> {output_path}")
             return True
 
-        except ConnectionError as e:
-            logger.error(f"IOPaint 服务不可用: {e}")
-            return False
         except Exception as e:
             logger.error(f"水印去除失败: {input_path}, 错误: {e}")
             return False
 
     async def health_check(self) -> bool:
+        if self.engine == "opencv":
+            return True
         if self.engine == "volc":
-            return self._volc_client is not None
+            return self._volc_client is not None or self.allow_local_fallback
         if self._iopaint_client:
-            return await self._iopaint_client.health_check()
-        return False
+            return await self._iopaint_client.health_check() or self.allow_local_fallback
+        return self.allow_local_fallback
 
     async def close(self):
         """关闭客户端连接"""
