@@ -21,7 +21,7 @@ except ImportError:  # pragma: no cover
 from app.core.database import get_db, SessionLocal
 from app.core.config import settings
 from app.core.settings_resolver import get_setting_value
-from app.core.constants import CROWD_TYPES
+from app.core.constants import CROWD_TYPES, SINGLE_TYPES
 from app.schemas.common import PromptGenerateRequest, BaseResponse
 from app.models.database import BaseImage, PromptTemplate, GenerateTask
 from app.services import progress_store as ps
@@ -123,11 +123,16 @@ def _build_task_negative_prompt(base_negative: str) -> str:
     return f"{base}, {extra}" if base else extra
 
 
-def _run_prompt_gen_background(batch_id: str, crowd_type_ids: list, reference_image_id: str | None = None):
+def _run_prompt_gen_background(
+    batch_id: str,
+    crowd_type_ids: list,
+    prompt_count: int,
+    reference_image_id: str | None = None,
+):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        loop.run_until_complete(_async_generate_prompts(batch_id, crowd_type_ids, reference_image_id))
+        loop.run_until_complete(_async_generate_prompts(batch_id, crowd_type_ids, prompt_count, reference_image_id))
     finally:
         loop.close()
 
@@ -135,6 +140,7 @@ def _run_prompt_gen_background(batch_id: str, crowd_type_ids: list, reference_im
 async def _async_generate_prompts(
     batch_id: str,
     crowd_type_ids: list,
+    prompt_count: int,
     reference_image_id: str | None = None,
 ):
     """异步批量生成提示词 — 分两阶段：1) 调API生成模板 2) 为所有底图创建任务"""
@@ -142,7 +148,7 @@ async def _async_generate_prompts(
     try:
         from app.services.prompt_generator import (
             PromptGenerator,
-            get_styles_for_crowd,
+            build_hot_outfit_styles,
         )
 
         api_key = get_setting_value(db, "prompt_api_key", "")
@@ -163,7 +169,7 @@ async def _async_generate_prompts(
             return
 
         styles_by_crowd = {
-            ct_id: get_styles_for_crowd(ct_id)
+            ct_id: build_hot_outfit_styles(ct_id, prompt_count)
             for ct_id in crowd_type_ids
         }
 
@@ -180,7 +186,8 @@ async def _async_generate_prompts(
             ref_image = base_images[0]
 
         ref_path = ref_image.processed_path or ref_image.original_path
-        reference_context = _summarize_reference_image(ref_path)
+        raw_reference_context = _summarize_reference_image(ref_path)
+        reference_context = await generator.refine_reference_context(raw_reference_context)
         template_count = sum(len(v) for v in styles_by_crowd.values())
         task_count = len(base_images) * template_count
 
@@ -189,7 +196,7 @@ async def _async_generate_prompts(
             batch_id,
             template_count,
             (
-                f"阶段1: 生成提示词模板 ({len(crowd_type_ids)} 类型 × 每类5套穿搭 = {template_count} 条) "
+                f"阶段1: 生成提示词模板 ({len(crowd_type_ids)} 类型 × 每类{prompt_count}条 = {template_count} 条) "
                 f"| 参考底图: {ref_image.filename}"
             ),
         )
@@ -212,7 +219,8 @@ async def _async_generate_prompts(
                 )
                 return
             ct_styles = styles_by_crowd.get(ct_id, [])
-            for style in ct_styles:
+            style_total = len(ct_styles)
+            for idx, style in enumerate(ct_styles, start=1):
                 if ps.is_cancel_requested(TASK_TYPE, batch_id):
                     ps.cancel(
                         TASK_TYPE,
@@ -229,6 +237,8 @@ async def _async_generate_prompts(
                         style,
                         reference_context=reference_context,
                         style_variation_hint=style.get("variation", ""),
+                        style_index=idx,
+                        style_total=style_total,
                     )
 
                     existing = db.query(PromptTemplate).filter(
@@ -389,8 +399,9 @@ async def _async_generate_prompts(
 @router.post("/generate", response_model=BaseResponse)
 async def generate_prompts(request: PromptGenerateRequest, db: Session = Depends(get_db)):
     """
-    一键生成全部类型提示词（异步后台任务）
-    - 19种人群类型 × 5种风格 = 95 条提示词模板
+    生成当前选中类型提示词（异步后台任务）
+    - 当前版本仅支持：单次一个人群类型（单人7类）
+    - 支持 N 条热门穿搭提示词
     - 为每张底图创建对应的 GenerateTask
     """
     from app.models.database import Batch
@@ -406,10 +417,14 @@ async def generate_prompts(request: PromptGenerateRequest, db: Session = Depends
     crowd_type_ids = list(dict.fromkeys(request.crowd_types or []))
     if not crowd_type_ids:
         return BaseResponse(code=1, message="请先选择人群类型后再生成提示词")
+    if len(crowd_type_ids) != 1:
+        return BaseResponse(code=1, message="当前版本仅支持单次选择1个人群类型")
+    if crowd_type_ids[0] not in SINGLE_TYPES:
+        return BaseResponse(code=1, message="当前版本仅支持单人7类，组合人群暂未开放")
 
     t = threading.Thread(
         target=_run_prompt_gen_background,
-        args=(request.batch_id, crowd_type_ids, request.reference_image_id),
+        args=(request.batch_id, crowd_type_ids, request.prompt_count, request.reference_image_id),
         daemon=True,
     )
     ps.clear_cancel(TASK_TYPE, request.batch_id)
@@ -418,6 +433,7 @@ async def generate_prompts(request: PromptGenerateRequest, db: Session = Depends
     return BaseResponse(code=0, message="提示词生成已启动", data={
         "batch_id": request.batch_id,
         "crowd_types_count": len(crowd_type_ids),
+        "prompt_count": request.prompt_count,
         "reference_image_id": request.reference_image_id or "",
     })
 

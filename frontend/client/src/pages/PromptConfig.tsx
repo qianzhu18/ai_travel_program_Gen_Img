@@ -78,6 +78,7 @@ export default function PromptConfig() {
   const [promptMap, setPromptMap] = useState<Record<string, PromptItem[]>>({});
   const [expandedType, setExpandedType] = useState<string | null>("C02");
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [promptCount, setPromptCount] = useState(5);
 
   // --- 生成进度 ---
   const [isGenerating, setIsGenerating] = useState(false);
@@ -201,11 +202,22 @@ export default function PromptConfig() {
       toast.info("请先选择一个人群类型");
       return;
     }
+    if (!crowdTypes.single.some((t) => t.id === expandedType)) {
+      toast.info("当前版本仅支持单人7类，组合人群暂未开放");
+      return;
+    }
+
+    const normalizedPromptCount = Math.max(1, Math.min(20, Number.isFinite(promptCount) ? promptCount : 5));
 
     setIsGenerating(true);
     setGenProgress(null);
 
-    const result = await promptApi.generate(batchId!, [expandedType], selectedImageId || undefined);
+    const result = await promptApi.generate(
+      batchId!,
+      [expandedType],
+      selectedImageId || undefined,
+      normalizedPromptCount,
+    );
     if (!result) {
       setIsGenerating(false);
       return;
@@ -214,7 +226,7 @@ export default function PromptConfig() {
     const typeName = allTypes.find((t) => t.id === expandedType)?.name || expandedType;
     const selectedImage = images.find((img) => img.id === selectedImageId);
     toast.info("提示词生成已启动", {
-      description: `正在为「${typeName}」生成提示词（参考底图：${selectedImage?.filename || "默认首图"}）...`,
+      description: `正在为「${typeName}」生成 ${normalizedPromptCount} 条提示词（参考底图：${selectedImage?.filename || "默认首图"}）...`,
     });
 
     const finalInfo = await pollGenerateProgress(batchId!);
@@ -229,7 +241,7 @@ export default function PromptConfig() {
     } else {
       toast.error("提示词生成失败或超时");
     }
-  }, [batchId, expandedType, selectedImageId, pollGenerateProgress, loadPrompts]);
+  }, [batchId, expandedType, selectedImageId, pollGenerateProgress, loadPrompts, promptCount]);
 
   // ========== 为单个人群类型重新生成 ==========
 
@@ -239,17 +251,29 @@ export default function PromptConfig() {
       return;
     }
 
+    if (!crowdTypes.single.some((t) => t.id === typeId)) {
+      toast.info("当前版本仅支持单人7类，组合人群暂未开放");
+      return;
+    }
+
+    const normalizedPromptCount = Math.max(1, Math.min(20, Number.isFinite(promptCount) ? promptCount : 5));
+
     setIsGenerating(true);
     setGenProgress(null);
 
-    const result = await promptApi.generate(batchId!, [typeId], selectedImageId || undefined);
+    const result = await promptApi.generate(
+      batchId!,
+      [typeId],
+      selectedImageId || undefined,
+      normalizedPromptCount,
+    );
     if (!result) {
       setIsGenerating(false);
       return;
     }
 
     const typeName = allTypes.find((t) => t.id === typeId)?.name || typeId;
-    toast.info(`正在为「${typeName}」重新生成提示词...`);
+    toast.info(`正在为「${typeName}」重新生成 ${normalizedPromptCount} 条提示词...`);
 
     const finalInfo = await pollGenerateProgress(batchId!);
     setIsGenerating(false);
@@ -263,7 +287,7 @@ export default function PromptConfig() {
     } else {
       toast.error("重新生成失败或超时");
     }
-  }, [batchId, selectedImageId, pollGenerateProgress, loadPrompts]);
+  }, [batchId, selectedImageId, pollGenerateProgress, loadPrompts, promptCount]);
 
   const handleCancelGenerate = useCallback(async () => {
     if (!batchId) return;
@@ -404,6 +428,22 @@ export default function PromptConfig() {
             )}
             {isGenerating ? "生成中..." : "生成当前类型"}
           </Button>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">提示词数量</span>
+            <Input
+              type="number"
+              min={1}
+              max={20}
+              value={promptCount}
+              onChange={(e) => {
+                const val = Number(e.target.value || 5);
+                if (!Number.isFinite(val)) return;
+                setPromptCount(Math.max(1, Math.min(20, Math.round(val))));
+              }}
+              className="h-8 w-20"
+              disabled={isGenerating}
+            />
+          </div>
         </div>
       }
     >
@@ -499,38 +539,9 @@ export default function PromptConfig() {
                 </div>
 
                 <div className="border-t border-border my-4" />
-
-                <div>
-                  <h4 className="text-sm font-medium text-muted-foreground mb-2 px-2">
-                    组合类型（12种）
-                  </h4>
-                  <div className="space-y-1">
-                    {crowdTypes.combo.map((type) => (
-                      <div
-                        key={type.id}
-                        className={cn(
-                          "flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors",
-                          expandedType === type.id ? "bg-accent" : "hover:bg-muted"
-                        )}
-                        onClick={() => setExpandedType(expandedType === type.id ? null : type.id)}
-                      >
-                        <div className="flex-1">
-                          <div className="flex items-center justify-between">
-                            <span className="text-sm font-medium">{type.name}</span>
-                            <span className="text-xs text-muted-foreground">
-                              {getTypePromptCount(type.id)} 个
-                            </span>
-                          </div>
-                        </div>
-                        {expandedType === type.id ? (
-                          <ChevronDown className="w-4 h-4 text-muted-foreground" />
-                        ) : (
-                          <ChevronRight className="w-4 h-4 text-muted-foreground" />
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                <p className="text-xs text-muted-foreground px-2">
+                  组合类型（12种）将在后续版本开放，当前仅支持单人7类。
+                </p>
               </div>
             </ScrollArea>
           </CardContent>

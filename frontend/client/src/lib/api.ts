@@ -248,12 +248,13 @@ export interface PromptItem {
 
 export const promptApi = {
   /** 一键生成提示词 */
-  generate(batchId: string, crowdTypes?: string[], referenceImageId?: string) {
+  generate(batchId: string, crowdTypes?: string[], referenceImageId?: string, promptCount = 5) {
     return unwrapWithRetry<{ batch_id: string; crowd_types_count: number }>(() =>
       http.post(API.prompt.generate, {
         batch_id: batchId,
         crowd_types: crowdTypes,
         reference_image_id: referenceImageId,
+        prompt_count: promptCount,
       }),
     );
   },

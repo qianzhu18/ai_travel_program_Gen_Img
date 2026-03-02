@@ -109,6 +109,7 @@ class PromptGenerateRequest(BaseModel):
     """提示词生成请求"""
     batch_id: str
     crowd_types: Optional[List[str]] = Field(None, description="指定人群类型，不指定则全部")
+    prompt_count: int = Field(5, ge=1, le=20, description="本次生成提示词数量(N条)")
     reference_image_id: Optional[str] = Field(
         None,
         description="参考底图ID，用于基于底图特征生成提示词",

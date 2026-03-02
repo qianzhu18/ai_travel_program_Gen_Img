@@ -3,7 +3,7 @@
 
 目标：
 - 以“人群年龄类型”为主轴
-- 为每类人群生成 5 套常见穿搭风格
+- 根据配置生成 N 条热门穿搭提示词
 - 背景仅作为景点/光影参考，不作为风格类别
 """
 import asyncio
@@ -178,6 +178,26 @@ def get_styles_for_crowd(crowd_type_id: str) -> List[Dict[str, str]]:
     return PAIR_STYLE_PRESETS.get(crowd_type_id, DEFAULT_STYLES)
 
 
+def build_hot_outfit_styles(crowd_type_id: str, prompt_count: int) -> List[Dict[str, str]]:
+    """
+    基于单个人群类型动态生成 N 条“热门穿搭”占位风格。
+    注意：这里不预设具体穿搭池，真正穿搭细节由大模型结合底图背景/光影生成。
+    """
+    count = max(1, min(int(prompt_count or 5), 20))
+    crowd_name = CROWD_TYPES.get(crowd_type_id, crowd_type_id)
+    styles: List[Dict[str, str]] = []
+    for idx in range(1, count + 1):
+        styles.append({
+            "name": f"热门穿搭{idx:02d}",
+            "desc": f"基于底图背景与光影，为{crowd_name}推荐当下热门穿搭造型",
+            "variation": (
+                f"第{idx}/{count}条：与其他条明显区分，必须同时变化服饰、发型、pose、"
+                "景别与人物站位，但背景地标和光影保持一致"
+            ),
+        })
+    return styles
+
+
 def _current_season() -> str:
     month = datetime.now().month
     if month in (3, 4, 5):
@@ -286,24 +306,69 @@ class PromptGenerator:
 
     @staticmethod
     def _default_system_prompt() -> str:
-        return """你是一个专业的AI绘画提示词生成专家。
-你需要根据用户提供的人群类型和风格，生成高质量的图像生成提示词。
-你必须以“参考底图”的背景为基础：保持背景场景、构图、机位、透视和光线稳定，但不要继承底图人物身份与五官，需要按目标人群重建人物脸和身份。
-你生成的是“同一景点打卡图的多人物版本”：地点、光影、景色要稳定，变化集中在人物类型与穿搭。
+        return """你是一位人物写真提示词设计师，擅长“同一景点背景下的人物穿搭替换”。
+核心原则：
+1) 仅参考底图背景和光影：地标、构图、机位、透视、明暗关系必须稳定。
+2) 仅改变人物主体：人物身份、脸、服饰、发型、姿态可变。
+3) 输出中文，不输出英文。
 
-提示词要求：
-1. 使用中文
-2. 包含人物描述（年龄、性别、气质、表情）
-3. 包含服装描述（风格、颜色、材质、细节）
-4. 包含场景描述（背景、环境、氛围）
-5. 包含光线和画面质量描述
-6. 适合生成9:16比例的高质量人物写真照片
-7. 每个提示词控制在80-150个中文词
+每条正向提示词必须覆盖5项：
+- 人物服饰
+- 发型
+- 动作pose
+- 景别（全身/半身/近景等）
+- 人物在背景中的位置（前景/中景/偏左/偏右/靠栏杆等）
 
-输出格式要求：
-- 只输出提示词本身，不要加任何解释或标题
-- 正向提示词和负向提示词用 "---NEGATIVE---" 分隔
-- 负向提示词简洁，列出需要避免的元素"""
+输出规则：
+- 只输出“正向提示词 + 负向提示词”
+- 正向与负向之间用 "---NEGATIVE---" 分隔
+- 负向提示词简洁且强约束“禁止改背景地标与光影”"""
+
+    async def refine_reference_context(self, raw_context: str) -> str:
+        """
+        将底图特征摘要再用大模型归纳成可读的“背景与光影理解”文本。
+        """
+        context = (raw_context or "").strip()
+        if not context:
+            return ""
+        if not self.api_key:
+            return context
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "你是摄影场景分析助手。请把输入特征整理为简洁中文，不新增不存在的内容。",
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "请基于以下底图特征生成“背景与光影理解”，用于后续人物换装生图。\n"
+                        "要求：1) 只写背景地标/光线/色调/构图；2) 40~80字；3) 中文短句。\n"
+                        f"特征：{context}"
+                    ),
+                },
+            ],
+            "temperature": 0.2,
+            "max_tokens": 220,
+        }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                resp = await client.post(BAILIAN_ENDPOINT, json=payload, headers=headers)
+            if resp.status_code != 200:
+                logger.warning("底图AI理解失败，回退原始特征: HTTP %s", resp.status_code)
+                return context
+            data = resp.json()
+            refined = data["choices"][0]["message"]["content"].strip()
+            return refined or context
+        except Exception as e:
+            logger.warning("底图AI理解异常，回退原始特征: %s", e)
+            return context
 
     def _build_user_prompt(
         self,
@@ -311,38 +376,34 @@ class PromptGenerator:
         style: Dict[str, str],
         reference_context: str = "",
         style_variation_hint: str = "",
+        style_index: int = 1,
+        style_total: int = 5,
     ) -> str:
         crowd_name = CROWD_TYPES.get(crowd_type_id, "未知")
         crowd_desc = CROWD_DESCRIPTIONS.get(crowd_type_id, "")
-        season = _current_season()
-        seasonal_hint = SEASONAL_TREND_HINTS.get(season, "")
         crowd_fashion = _crowd_fashion_hint(crowd_type_id)
-        outfit_pack = _recommended_outfit_pack(crowd_type_id, season)
         ref_block = f"\n参考底图特征：{reference_context}" if reference_context else ""
         variation_block = (
             f"\n造型变化方向：{style_variation_hint}"
             if style_variation_hint
             else "\n造型变化方向：保持背景场景与机位稳定，人物身份与面部重建为目标人群，优先变化服装/发型/配饰/妆容，避免重复造型"
         )
-        trend_block = (
-            f"\n当季穿搭趋势：{seasonal_hint}"
-            if seasonal_hint
-            else ""
-        )
+        style_order_block = f"\n当前生成序号：第 {style_index}/{style_total} 条（要求与其他条明显不同）"
         crowd_fashion_block = f"\n年龄段穿搭约束：{crowd_fashion}"
-        outfit_pack_block = f"\n该年龄段推荐穿搭清单（至少选其一落地）：{outfit_pack}"
         return f"""请为以下组合生成一个图像生成提示词：
 
 人群类型：{crowd_name}（{crowd_desc}）
 风格：{style['name']}（{style['desc']}）
-{ref_block}{variation_block}{trend_block}{crowd_fashion_block}{outfit_pack_block}
+{ref_block}{style_order_block}{variation_block}{crowd_fashion_block}
 
 要求：
 - 输出中文正向提示词 + 负向提示词
 - 正向提示词和负向提示词用 "---NEGATIVE---" 分隔
 - 适合生成9:16比例的人物写真
+- 这是单人主体替换任务：保持背景不变，仅替换人物造型与穿搭
 - 明确要求“仅参考底图背景（景点/光影/景色），不要继承底图人物脸和身份，按目标人群重建人物”
 - 明确要求“背景建筑与地标关系保持稳定，不要改换成其他景点”
+- 必须写清：服饰、发型、动作pose、景别、人物在背景中的位置
 - 强调“优先写清服装/发型/配饰/姿态，不要过度强调面部细节，确保后续换脸可用（无遮挡脸部）”"""
 
     async def generate_single(
@@ -351,6 +412,8 @@ class PromptGenerator:
         style: Dict[str, str],
         reference_context: str = "",
         style_variation_hint: str = "",
+        style_index: int = 1,
+        style_total: int = 5,
     ) -> Tuple[str, str]:
         """
         生成单条提示词
@@ -366,6 +429,8 @@ class PromptGenerator:
             style,
             reference_context=reference_context,
             style_variation_hint=style_variation_hint,
+            style_index=style_index,
+            style_total=style_total,
         )
 
         payload = {
@@ -425,6 +490,7 @@ class PromptGenerator:
         crowd_type_ids: Optional[List[str]] = None,
         styles: Optional[List[Dict[str, str]]] = None,
         reference_context: str = "",
+        prompt_count: int = 5,
         progress_callback=None,
     ) -> List[Dict]:
         """
@@ -432,7 +498,8 @@ class PromptGenerator:
 
         Args:
             crowd_type_ids: 人群类型ID列表，None则全部19种
-            styles: 风格列表（仅在单一人群调试时传入），None则按人群自动选择5种穿搭
+            styles: 风格列表（仅在单一人群调试时传入），None则按人群动态生成热门穿搭
+            prompt_count: 每个人群生成条数（仅 styles 为 None 时生效）
             progress_callback: 进度回调 (current, total, crowd_type, style_name, status)
 
         Returns:
@@ -443,14 +510,15 @@ class PromptGenerator:
             crowd_type_ids = list(CROWD_TYPES.keys())
         styles_by_crowd = {}
         for ct_id in crowd_type_ids:
-            styles_by_crowd[ct_id] = styles if styles is not None else get_styles_for_crowd(ct_id)
+            styles_by_crowd[ct_id] = styles if styles is not None else build_hot_outfit_styles(ct_id, prompt_count)
         total = sum(len(v) for v in styles_by_crowd.values())
         results = []
         current = 0
 
         for ct_id in crowd_type_ids:
             ct_styles = styles_by_crowd.get(ct_id, [])
-            for style in ct_styles:
+            style_total = len(ct_styles)
+            for idx, style in enumerate(ct_styles, start=1):
                 current += 1
                 try:
                     positive, negative = await self.generate_single(
@@ -458,6 +526,8 @@ class PromptGenerator:
                         style,
                         reference_context=reference_context,
                         style_variation_hint=style.get("variation", ""),
+                        style_index=idx,
+                        style_total=style_total,
                     )
                     results.append({
                         "crowd_type": ct_id,
