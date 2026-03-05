@@ -58,6 +58,9 @@ data/
 *.fixed
 *.fixed2
 nul
+.DS_Store
+Termius
+.git-backups/
 
 # 备份和pencil文件
 *.pen.bak*
