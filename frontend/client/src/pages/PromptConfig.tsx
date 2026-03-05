@@ -26,6 +26,7 @@ import {
   Pause,
   Plus,
   Upload,
+  Download,
   Search,
   ClipboardPaste,
 } from "lucide-react";
@@ -615,6 +616,25 @@ export default function PromptConfig() {
     }
   }, [expandedType, bulkText]);
 
+  const handleExportBackup = useCallback(async () => {
+    const crowdType = expandedType || undefined;
+    const result = await promptApi.exportBackup(crowdType, false);
+    if (!result) return;
+
+    const typeName = crowdType
+      ? (allTypes.find((t) => t.id === crowdType)?.name || crowdType)
+      : "全部";
+    const filename = `prompt-library-backup-${crowdType || "all"}-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.json`;
+    const blob = new Blob([JSON.stringify(result, null, 2)], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success(`已导出「${typeName}」词库备份，共 ${result.total} 条`);
+  }, [expandedType]);
+
   const handleSelectImportFile = useCallback(() => {
     importInputRef.current?.click();
   }, []);
@@ -741,6 +761,10 @@ export default function PromptConfig() {
           <Button variant="outline" size="sm" onClick={handleSave}>
             <Save className="w-4 h-4 mr-2" />
             保存配置
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleExportBackup}>
+            <Download className="w-4 h-4 mr-2" />
+            导出备份
           </Button>
           <Button variant="outline" size="sm" onClick={handleOpenImportDialog}>
             <ClipboardPaste className="w-4 h-4 mr-2" />
@@ -1106,7 +1130,7 @@ export default function PromptConfig() {
                   </span>
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  文件格式支持：`.csv`、`.json`。建议优先使用“文本粘贴（推荐）”。
+                  文件格式支持：`.csv`、`.json`。可直接导入“导出备份(JSON)”文件。
                 </div>
               </div>
             )}

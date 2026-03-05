@@ -27,6 +27,7 @@ export const API = {
     create: `${API_BASE}/prompt/create`,
     bulkUpsert: `${API_BASE}/prompt/bulk-upsert`,
     import: `${API_BASE}/prompt/import`,
+    backupExport: `${API_BASE}/prompt/backup/export`,
     progress: (batchId: string) => `${API_BASE}/prompt/progress/${batchId}`,
     cancel: (batchId: string) => `${API_BASE}/prompt/cancel/${batchId}`,
     list: `${API_BASE}/prompt/list`,

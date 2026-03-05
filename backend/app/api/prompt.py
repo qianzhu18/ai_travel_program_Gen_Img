@@ -11,6 +11,7 @@ import io
 import json
 import logging
 import threading
+from datetime import datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -111,7 +112,7 @@ def _parse_json_rows(content: str) -> tuple[list[dict[str, Any]], list[str]]:
         return [], [f"JSON 解析失败: {e}"]
 
     if isinstance(payload, dict):
-        data = payload.get("rows", [])
+        data = payload.get("rows", payload.get("items", []))
     elif isinstance(payload, list):
         data = payload
     else:
@@ -733,4 +734,67 @@ async def delete_prompts_by_crowd(crowd_type: str, db: Session = Depends(get_db)
         code=0,
         message=f"已删除 {len(templates)} 条提示词",
         data={"deleted_count": len(templates)},
+    )
+
+
+@router.get("/backup/export", response_model=BaseResponse)
+async def export_prompt_backup(
+    crowd_type: Optional[str] = None,
+    include_inactive: bool = False,
+    db: Session = Depends(get_db),
+):
+    """
+    导出提示词词库备份（JSON）
+    - 默认仅导出启用词条
+    - 可按人群类型导出
+    """
+    if crowd_type and crowd_type not in CROWD_TYPES:
+        raise HTTPException(status_code=400, detail=f"无效的人群类型: {crowd_type}")
+
+    query = db.query(PromptTemplate)
+    if crowd_type:
+        query = query.filter(PromptTemplate.crowd_type == crowd_type)
+    if not include_inactive:
+        query = query.filter(PromptTemplate.is_active.is_(True))
+
+    templates = query.order_by(
+        PromptTemplate.crowd_type.asc(),
+        PromptTemplate.create_time.asc(),
+        PromptTemplate.style_name.asc(),
+    ).all()
+
+    rows = [
+        {
+            "crowd_type": t.crowd_type,
+            "crowd_name": CROWD_TYPES.get(t.crowd_type, t.crowd_type),
+            "style_name": t.style_name,
+            "positive_prompt": t.positive_prompt,
+            "negative_prompt": t.negative_prompt or "",
+            "reference_weight": int(t.reference_weight or 80),
+            "preferred_engine": _normalize_engine(t.preferred_engine or "seedream"),
+            "is_active": bool(t.is_active),
+            "create_time": t.create_time.isoformat() if t.create_time else "",
+        }
+        for t in templates
+    ]
+
+    counts: dict[str, int] = {}
+    for row in rows:
+        ct = row["crowd_type"]
+        counts[ct] = counts.get(ct, 0) + 1
+
+    return BaseResponse(
+        code=0,
+        message=f"导出成功，共 {len(rows)} 条词条",
+        data={
+            "schema": "prompt-library-backup-v1",
+            "exported_at": datetime.utcnow().isoformat() + "Z",
+            "filters": {
+                "crowd_type": crowd_type or "",
+                "include_inactive": include_inactive,
+            },
+            "total": len(rows),
+            "counts_by_crowd": counts,
+            "rows": rows,
+        },
     )

@@ -265,6 +265,25 @@ export interface PromptBulkItemPayload {
   is_active?: boolean;
 }
 
+export interface PromptBackupExport {
+  schema: string;
+  exported_at: string;
+  filters: { crowd_type: string; include_inactive: boolean };
+  total: number;
+  counts_by_crowd: Record<string, number>;
+  rows: Array<{
+    crowd_type: string;
+    crowd_name: string;
+    style_name: string;
+    positive_prompt: string;
+    negative_prompt: string;
+    reference_weight: number;
+    preferred_engine: string;
+    is_active: boolean;
+    create_time: string;
+  }>;
+}
+
 export const promptApi = {
   /** 一键生成提示词 */
   generate(batchId: string, crowdTypes?: string[], referenceImageId?: string, promptCount = 5) {
@@ -355,6 +374,18 @@ export const promptApi = {
         crowd_type: crowdType,
         items,
         replace_current: replaceCurrent,
+      }),
+    );
+  },
+
+  /** 导出词库备份（JSON） */
+  exportBackup(crowdType?: string, includeInactive = false) {
+    return unwrap<PromptBackupExport>(
+      http.get(API.prompt.backupExport, {
+        params: {
+          crowd_type: crowdType,
+          include_inactive: includeInactive,
+        },
       }),
     );
   },
