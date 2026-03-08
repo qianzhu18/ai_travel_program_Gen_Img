@@ -54,4 +54,10 @@ def mask_value(plaintext: str) -> str:
 
 def is_api_key_field(key: str) -> bool:
     """判断配置项是否为 API Key 类字段"""
-    return "api_key" in key.lower()
+    key_lower = key.lower()
+    return (
+        "api_key" in key_lower
+        or "access_key_id" in key_lower
+        or "secret_access_key" in key_lower
+        or "secret_key" in key_lower
+    )

@@ -138,6 +138,66 @@ async def test_connection(request: TestConnectionRequest, db: Session = Depends(
                 return BaseResponse(code=1, message=f"API易平台认证失败 (HTTP {chat_resp.status_code})，请检查 API Key 是否正确",
                                     data={"connected": False})
 
+            elif service == "volcgen":
+                # 火山引擎生图 - 测试 AK/SK 是否有效
+                from app.core.encryption import decrypt_value
+
+                ak_key = "volcgen_access_key_id"
+                sk_key = "volcgen_secret_access_key"
+
+                # 如果请求中包含完整的 AK/SK（格式: AK:SK），使用请求中的值
+                if ":" in api_key:
+                    parts = api_key.split(":", 1)
+                    access_key_id = parts[0]
+                    secret_access_key = parts[1] if len(parts) > 1 else ""
+                else:
+                    # 否则从数据库读取
+                    ak_row = db.query(Settings).filter(Settings.key == ak_key).first()
+                    sk_row = db.query(Settings).filter(Settings.key == sk_key).first()
+                    access_key_id = decrypt_value(ak_row.value) if ak_row and ak_row.value else ""
+                    secret_access_key = decrypt_value(sk_row.value) if sk_row and sk_row.value else ""
+
+                if not access_key_id or not secret_access_key:
+                    return BaseResponse(code=1, message="请先配置火山引擎 AccessKeyId 和 SecretAccessKey",
+                                        data={"connected": False})
+
+                try:
+                    from app.services.volc_image_gen import VolcImageGenClient
+
+                    volc_client = VolcImageGenClient(
+                        access_key_id=access_key_id,
+                        secret_access_key=secret_access_key,
+                    )
+
+                    # 尝试调用接口验证凭据
+                    test_body = {
+                        "req_key": "aigc_text2img",
+                        "prompt": "test",
+                        "model_version": "latentSync",
+                        "width": 512,
+                        "height": 512,
+                        "seed": 0,
+                        "steps": 10,
+                    }
+
+                    result = await volc_client._post("CVSync2AsyncSubmitTask", "2022-08-31", test_body)
+                    await volc_client.close()
+
+                    # 只要没有抛出异常，说明认证是成功的
+                    return BaseResponse(code=0, message="火山引擎生图连接成功",
+                                        data={"connected": True})
+
+                except RuntimeError as e:
+                    error_str = str(e)
+                    if "HTTP 400" in error_str or "HTTP 403" in error_str or "HTTP 401" in error_str:
+                        return BaseResponse(code=1, message="火山引擎认证失败，请检查 AK/SK 是否正确",
+                                            data={"connected": False})
+                    return BaseResponse(code=1, message=f"火山引擎连接失败: {error_str[:100]}",
+                                        data={"connected": False})
+                except Exception as e:
+                    return BaseResponse(code=1, message=f"火山引擎连接失败: {str(e)[:100]}",
+                                        data={"connected": False})
+
             else:
                 return BaseResponse(code=1, message=f"未知服务: {service}")
 

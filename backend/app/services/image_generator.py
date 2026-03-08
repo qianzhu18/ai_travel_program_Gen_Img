@@ -48,7 +48,7 @@ class APIYiImageClient:
         self.api_key = api_key or app_settings.APIYI_API_KEY
         self.api_url = (api_url or app_settings.APIYI_API_URL).rstrip("/")
         self.timeout = 240.0  # 单图超时240秒
-        self.seedream_model = (seedream_model or "seedream-4-5-251128").strip()
+        self.seedream_model = (seedream_model or "flux-kontext-pro").strip()
         self.nanobanana_model = (nanobanana_model or "nano-banana-pro").strip()
         self.seedream_size = "1440x2560"  # Seedream 当前渠道要求 >= 3686400 像素，9:16 最小可用
         self.nanobanana_size = "576x1024"
@@ -177,6 +177,13 @@ class APIYiImageClient:
 
         # 读取并压缩参考图片
         ref_b64 = self._load_reference_base64(reference_image_path)
+
+        # 调试日志：追踪参考图加载情况
+        if reference_image_path:
+            logger.info(f"[图生图调试] 参考图路径: {reference_image_path}, 存在: {Path(reference_image_path).exists()}, 加载结果: {'成功' if ref_b64 else f'失败(len={len(ref_b64)})'}")
+        else:
+            logger.warning(f"[图生图调试] 参考图路径为空！将使用纯文生图模式")
+
         if self.strict_reference and not ref_b64:
             self._record_error(400, "strict_reference_missing")
             self.last_error_code = "strict_reference_missing"
@@ -205,6 +212,11 @@ class APIYiImageClient:
         elif engine == "nanobanana":
             return await self._generate_nanobanana(
                 headers, prompt, negative_prompt, ref_b64, reference_weight, output_path
+            )
+        elif engine in ("volcengine", "volcgen", "volc"):
+            # 火山引擎生图（直接调用官方 API）
+            return await self._generate_volcengine(
+                prompt, negative_prompt, ref_b64, reference_weight, output_path
             )
         else:
             raise ValueError(f"不支持的引擎: {engine}")
@@ -284,8 +296,136 @@ class APIYiImageClient:
         self._apply_watermark_options(payload)
         return await self._call_api(headers, payload, output_path)
 
+    async def _generate_volcengine(
+        self,
+        prompt: str,
+        negative_prompt: str,
+        ref_b64: str,
+        ref_weight: int,
+        output_path: str,
+    ) -> bool:
+        """火山引擎生图（直接调用官方 API）"""
+        from app.core.database import get_setting_value, SessionLocal
+        from app.services.volc_image_gen import VolcImageGenClient
+
+        db = SessionLocal()
+        try:
+            access_key_id = get_setting_value(db, "volcgen_access_key_id", "")
+            secret_access_key = get_setting_value(db, "volcgen_secret_access_key", "")
+            region = get_setting_value(db, "volcgen_region", "cn-north-1")
+            model = get_setting_value(db, "volcgen_model", "latentSync")
+            strength = float(get_setting_value(db, "volcgen_strength", "0.7"))
+            steps = int(get_setting_value(db, "volcgen_steps", "30"))
+            cfg_scale = float(get_setting_value(db, "volcgen_cfg_scale", "7.5"))
+
+            if not access_key_id or not secret_access_key:
+                self._record_error(401, "火山引擎 AK/SK 未配置")
+                self.last_error_code = "volc_missing_credentials"
+                self.last_error_message = "请先在系统设置中配置火山引擎 AccessKeyId 和 SecretAccessKey"
+                logger.error("火山引擎生图失败: AK/SK 未配置")
+                return False
+
+            client = VolcImageGenClient(
+                access_key_id=access_key_id,
+                secret_access_key=secret_access_key,
+                region=region,
+            )
+
+            logger.info(f"[火山引擎生图] model={model}, strength={strength}, steps={steps}, prompt={prompt[:50]}...")
+
+            # 如果有参考图，使用图生图；否则使用文生图
+            if ref_b64 and Path(output_path).parent.parent.joinpath("uploads").exists():
+                # 保存参考图到临时文件供火山引擎使用
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+                    tmp_path = tmp.name
+                # 从配置中获取参考图路径
+                ref_path = output_path.replace(str(settings.GENERATED_DIR), "").split("_")[0]
+                ref_full_path = str(settings.GENERATED_DIR.parent / "uploads" / ref_path)
+                # 尝试找到实际的参考图文件
+                if Path(ref_full_path).exists():
+                    image_url = await client.image_to_image(
+                        prompt=prompt,
+                        reference_image_path=ref_full_path,
+                        negative_prompt=negative_prompt,
+                        model=model,
+                        strength=strength,
+                        seed=0,
+                        steps=steps,
+                        cfg_scale=cfg_scale,
+                    )
+                else:
+                    logger.warning(f"参考图不存在: {ref_full_path}，回退为文生图")
+                    if self.strict_reference:
+                        self._record_error(400, "strict_reference_missing")
+                        self.last_error_code = "strict_reference_missing"
+                        return False
+                    image_url = None
+
+                if not image_url:
+                    image_url = await client.text_to_image(
+                        prompt=prompt,
+                        negative_prompt=negative_prompt,
+                        model=model,
+                        size="1440x2560",
+                        seed=0,
+                        steps=steps,
+                        cfg_scale=cfg_scale,
+                    )
+            else:
+                if self.strict_reference:
+                    logger.warning("火山引擎严格参考模式：无参考图，使用文生图")
+                image_url = await client.text_to_image(
+                    prompt=prompt,
+                    negative_prompt=negative_prompt,
+                    model=model,
+                    size="1440x2560",
+                    seed=0,
+                    steps=steps,
+                    cfg_scale=cfg_scale,
+                )
+
+            await client.close()
+
+            if not image_url:
+                self._record_error(500, client.last_error or "火山引擎生图失败")
+                self.last_error_code = client.last_error_code or "volc_generation_failed"
+                self.last_error_message = client.last_error or "火山引擎生图失败"
+                return False
+
+            # 下载生成的图片
+            import httpx
+            async with httpx.AsyncClient(timeout=60) as http_client:
+                img_resp = await http_client.get(image_url)
+                if img_resp.status_code != 200:
+                    self._record_error(img_resp.status_code, f"下载图片失败: HTTP {img_resp.status_code}")
+                    self.last_error_code = f"http_{img_resp.status_code}"
+                    return False
+
+                Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+                Path(output_path).write_bytes(img_resp.content)
+
+            logger.info(f"火山引擎生图成功: {output_path}")
+            return True
+
+        except Exception as e:
+            logger.error(f"火山引擎生图异常: {e}")
+            self._record_error(500, str(e))
+            self.last_error_code = "volc_exception"
+            self.last_error_message = str(e)
+            return False
+        finally:
+            db.close()
+
     async def _call_api(self, headers: dict, payload: dict, output_path: str) -> bool:
         """调用 API易 生图接口并保存结果"""
+        # 调试日志：追踪 API 请求参数
+        has_image = "image" in payload
+        model = payload.get("model", "unknown")
+        ref_strength = payload.get("reference_strength", 0)
+        prompt_preview = payload.get("prompt", "")[:50]
+        logger.info(f"[API调试] model={model}, has_image={has_image}, reference_strength={ref_strength}, prompt={prompt_preview}...")
+
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 resp = await client.post(

@@ -6,8 +6,8 @@ from pathlib import Path
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
-# 项目根目录
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
+# 项目根目录（从 backend/app/core/config.py 向上 3 级是不够的，需要 4 级才能到项目根目录）
+BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 
 class Settings(BaseSettings):
     """系统配置类"""
@@ -108,7 +108,7 @@ class Settings(BaseSettings):
     EXPORT_DIR: Path = DATA_DIR / "exports"
 
     class Config:
-        env_file = ".env"
+        env_file = str(BASE_DIR / ".env")  # 使用绝对路径，确保无论从哪里运行都能找到
         case_sensitive = True
         extra = "ignore"
 

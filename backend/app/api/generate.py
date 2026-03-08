@@ -255,12 +255,23 @@ async def _async_batch_generate(batch_id: str, engine: str):
         reason_stats: dict[str, int] = {}
         quota_alerted = False
 
-        # 为每张底图预生成“背景参考图”，弱化人像，锁定景点/光影/构图
+        # 检查是否启用背景参考图处理（默认直接使用原图，保留更多细节）
+        # use_bg_ref_processing = 1 时启用背景处理（弱化人像），= 0 或不设置时直接使用原图
+        use_bg_ref_processing = (
+            get_setting_value(db, "use_bg_ref_processing", "0").strip() == "1"
+        )
+
+        # 为每张底图预生成参考图
         bg_reference_map: dict[str, str] = {}
         for img_id, info in image_task_map.items():
             src_ref = (info.get("ref_path") or "").strip()
             if src_ref:
-                bg_reference_map[img_id] = _render_background_reference(src_ref, img_id)
+                if use_bg_ref_processing:
+                    # 处理模式：弱化人像，保留景点/光影/构图
+                    bg_reference_map[img_id] = _render_background_reference(src_ref, img_id)
+                else:
+                    # 直接使用原图作为参考（保留更多细节）
+                    bg_reference_map[img_id] = src_ref
             else:
                 bg_reference_map[img_id] = src_ref
 
@@ -272,7 +283,8 @@ async def _async_batch_generate(batch_id: str, engine: str):
             TASK_TYPE,
             batch_id,
             (
-                f"[REF] 已准备背景参考图 {len(bg_reference_map)} 张（锁景点/光影，弱化原人像）"
+                f"[REF] 已准备参考图 {len(bg_reference_map)} 张"
+                f" ({'背景处理模式' if use_bg_ref_processing else '直接使用原图'})"
                 f" | strict_reference={'开启' if strict_reference_mode else '关闭'}"
             ),
         )
