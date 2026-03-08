@@ -3,7 +3,7 @@
 """
 import os
 from pathlib import Path
-from pydantic import field_validator
+from pydantic import field_validator, computed_field
 from pydantic_settings import BaseSettings
 
 # 项目根目录（从 backend/app/core/config.py 向上 3 级是不够的，需要 4 级才能到项目根目录）
@@ -37,20 +37,72 @@ class Settings(BaseSettings):
     # 数据库配置
     DATABASE_URL: str = f"sqlite:///{BASE_DIR}/data/database.db"
 
-    # 文件存储路径
-    DATA_DIR: Path = BASE_DIR / "data"
-    UPLOAD_DIR: Path = DATA_DIR / "uploads"
-    PROCESSED_DIR: Path = DATA_DIR / "processed"
-    GENERATED_DIR: Path = DATA_DIR / "generated"
-    SELECTED_DIR: Path = DATA_DIR / "selected"
-    PENDING_DIR: Path = DATA_DIR / "pending"
-    COMPRESSED_DIR: Path = DATA_DIR / "compressed"
-    TRASH_DIR: Path = DATA_DIR / "trash"
-    LOGS_DIR: Path = DATA_DIR / "logs"
+    # 文件存储路径（Docker 中通过环境变量覆盖）
+    # pydantic-settings 会自动将环境变量 DATA_DIR 映射到 data_dir 字段
+    data_dir: str = ""  # 环境变量覆盖
+    models_dir: str = ""  # 环境变量覆盖
+
+    @computed_field
+    @property
+    def DATA_DIR(self) -> Path:
+        """数据目录，可通过环境变量 DATA_DIR 覆盖"""
+        if self.data_dir:
+            return Path(self.data_dir)
+        return BASE_DIR / "data"
+
+    @computed_field
+    @property
+    def UPLOAD_DIR(self) -> Path:
+        return self.DATA_DIR / "uploads"
+
+    @computed_field
+    @property
+    def PROCESSED_DIR(self) -> Path:
+        return self.DATA_DIR / "processed"
+
+    @computed_field
+    @property
+    def GENERATED_DIR(self) -> Path:
+        return self.DATA_DIR / "generated"
+
+    @computed_field
+    @property
+    def SELECTED_DIR(self) -> Path:
+        return self.DATA_DIR / "selected"
+
+    @computed_field
+    @property
+    def PENDING_DIR(self) -> Path:
+        return self.DATA_DIR / "pending"
+
+    @computed_field
+    @property
+    def COMPRESSED_DIR(self) -> Path:
+        return self.DATA_DIR / "compressed"
+
+    @computed_field
+    @property
+    def TRASH_DIR(self) -> Path:
+        return self.DATA_DIR / "trash"
+
+    @computed_field
+    @property
+    def LOGS_DIR(self) -> Path:
+        return self.DATA_DIR / "logs"
 
     # AI模型路径
-    MODELS_DIR: Path = BASE_DIR / "models"
-    LAMA_MODEL_PATH: Path = MODELS_DIR / "lama"
+    @computed_field
+    @property
+    def MODELS_DIR(self) -> Path:
+        """模型目录，可通过环境变量 MODELS_DIR 覆盖"""
+        if self.models_dir:
+            return Path(self.models_dir)
+        return BASE_DIR / "models"
+
+    @computed_field
+    @property
+    def LAMA_MODEL_PATH(self) -> Path:
+        return self.MODELS_DIR / "lama"
 
     # AI服务API配置
     # API易平台统一密钥（SeedDream 4.5 + Nano Banana Pro 共用）
@@ -105,17 +157,21 @@ class Settings(BaseSettings):
 
     # 导出配置（Docker 中通过环境变量覆盖为 /app/data/exports）
     DEFAULT_EXPORT_DIR: Path = Path.home() / "Pictures" / "AI图片导出"
-    EXPORT_DIR: Path = DATA_DIR / "exports"
+
+    @computed_field
+    @property
+    def EXPORT_DIR(self) -> Path:
+        return self.DATA_DIR / "exports"
 
     class Config:
         env_file = str(BASE_DIR / ".env")  # 使用绝对路径，确保无论从哪里运行都能找到
-        case_sensitive = True
+        case_sensitive = False  # 允许环境变量不区分大小写匹配
         extra = "ignore"
 
 # 创建全局配置实例
 settings = Settings()
 
-# 确保所有目录存在
+# 确保所有目录存在（忽略只读卷的权限错误）
 for directory in [
     settings.DATA_DIR,
     settings.UPLOAD_DIR,
@@ -129,4 +185,8 @@ for directory in [
     settings.MODELS_DIR,
     settings.EXPORT_DIR,
 ]:
-    directory.mkdir(parents=True, exist_ok=True)
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        # 忽略只读卷的权限错误（如 Docker 挂载的 /app/models）
+        pass

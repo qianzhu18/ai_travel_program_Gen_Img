@@ -10,6 +10,7 @@ services:
       # Docker 内路径覆盖
       DATABASE_URL: sqlite:////app/data/database.db
       DATA_DIR: /app/data
+      MODELS_DIR: /app/models
       DEFAULT_EXPORT_DIR: /app/data/exports
       IOPAINT_URL: http://iopaint:8090
     volumes:

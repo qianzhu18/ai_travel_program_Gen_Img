@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -35,6 +36,13 @@ router = APIRouter()
 
 TASK_TYPE = "prompt"
 VALID_ENGINES = {"seedream", "nanobanana"}
+
+
+class PromptBackupImportRequest(BaseModel):
+    """提示词备份导入请求"""
+    backup: Any = Field(..., description="备份JSON对象/数组，支持 export 接口原始结构")
+    crowd_type: Optional[str] = Field(None, description="可选：仅导入到指定人群类型")
+    replace_current: bool = Field(True, description="是否先覆盖导入范围内已有启用词条")
 
 
 def _normalize_engine(value: Optional[str], fallback: str = "seedream") -> str:
@@ -176,6 +184,30 @@ def _normalize_import_row(
         "is_active": is_active,
     }
     return normalized, None
+
+
+def _extract_backup_rows(payload: Any) -> tuple[list[dict[str, Any]], Optional[str]]:
+    """
+    从备份 JSON 中提取 rows
+    兼容格式：
+    1) { schema, rows: [...] }（本系统导出）
+    2) { data: { rows: [...] } }（误包裹一层 BaseResponse.data）
+    3) [...rows]
+    """
+    if isinstance(payload, list):
+        rows = [row for row in payload if isinstance(row, dict)]
+        return rows, None
+
+    if isinstance(payload, dict):
+        rows = payload.get("rows")
+        if isinstance(rows, list):
+            return [row for row in rows if isinstance(row, dict)], None
+
+        data = payload.get("data")
+        if isinstance(data, dict) and isinstance(data.get("rows"), list):
+            return [row for row in data["rows"] if isinstance(row, dict)], None
+
+    return [], "备份内容格式不正确：未找到 rows 数组"
 
 
 def _run_prompt_apply_background(
@@ -618,6 +650,82 @@ async def import_prompts(
             "error_count": len(parse_errors),
             "errors": parse_errors[:20],
             "affected_crowds": affected_crowds,
+        },
+    )
+
+
+@router.post("/backup/import", response_model=BaseResponse)
+async def import_prompt_backup(request: PromptBackupImportRequest, db: Session = Depends(get_db)):
+    """
+    导入提示词备份（JSON）
+    - 支持 export_backup 导出的完整对象
+    - 支持粘贴 rows 数组
+    - 可选择仅导入到指定 crowd_type（会覆盖行内 crowd_type）
+    """
+    fallback_crowd = (request.crowd_type or "").strip().upper() or None
+    if fallback_crowd and fallback_crowd not in CROWD_TYPES:
+        return BaseResponse(code=1, message=f"参数 crowd_type 无效: {fallback_crowd}")
+
+    raw_rows, extract_err = _extract_backup_rows(request.backup)
+    if extract_err:
+        return BaseResponse(code=1, message=extract_err)
+
+    parse_errors: list[str] = []
+    normalized_rows: list[dict[str, Any]] = []
+    for idx, raw in enumerate(raw_rows, start=1):
+        row = dict(raw)
+        row.setdefault("_row_index", idx)
+        normalized, err = _normalize_import_row(row, fallback_crowd)
+        if err:
+            parse_errors.append(err)
+            continue
+        normalized_rows.append(normalized)  # type: ignore[arg-type]
+
+    if not normalized_rows:
+        msg = "备份中没有可导入词条"
+        if parse_errors:
+            msg += f"：{parse_errors[0]}"
+        return BaseResponse(code=1, message=msg)
+
+    affected_crowds = sorted({r["crowd_type"] for r in normalized_rows})
+    if request.replace_current:
+        db.query(PromptTemplate).filter(
+            PromptTemplate.crowd_type.in_(affected_crowds),
+            PromptTemplate.is_active.is_(True),
+        ).update({PromptTemplate.is_active: False}, synchronize_session=False)
+        db.commit()
+
+    created_count = 0
+    updated_count = 0
+    for row in normalized_rows:
+        existing = db.query(PromptTemplate).filter(
+            PromptTemplate.crowd_type == row["crowd_type"],
+            PromptTemplate.style_name == row["style_name"],
+        ).order_by(PromptTemplate.create_time.desc()).first()
+
+        if existing:
+            existing.positive_prompt = row["positive_prompt"]
+            existing.negative_prompt = row["negative_prompt"]
+            existing.reference_weight = row["reference_weight"]
+            existing.preferred_engine = row["preferred_engine"]
+            existing.is_active = row["is_active"]
+            updated_count += 1
+        else:
+            db.add(PromptTemplate(**row))
+            created_count += 1
+
+    db.commit()
+
+    return BaseResponse(
+        code=0,
+        message=f"备份导入完成：新增 {created_count}，更新 {updated_count}",
+        data={
+            "created_count": created_count,
+            "updated_count": updated_count,
+            "error_count": len(parse_errors),
+            "errors": parse_errors[:20],
+            "affected_crowds": affected_crowds,
+            "total_rows": len(normalized_rows),
         },
     )
 
