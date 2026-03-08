@@ -48,6 +48,7 @@ export default function Settings() {
   const [saving, setSaving] = useState(false);
   const [testingBailian, setTestingBailian] = useState(false);
   const [testingApiyi, setTestingApiyi] = useState(false);
+  const [testingVolcgen, setTestingVolcgen] = useState(false);
 
   // fetch settings on mount
   const fetchSettings = useCallback(async () => {
@@ -95,7 +96,7 @@ export default function Settings() {
 
   // test connection
   const testConnection = async (
-    service: "bailian" | "apiyi",
+    service: "bailian" | "apiyi" | "volcgen",
     apiKey: string,
     setTesting: (v: boolean) => void,
   ) => {
@@ -372,6 +373,10 @@ export default function Settings() {
                   <RadioGroupItem value="nanobanana" id="engine-nanobanana" />
                   <Label htmlFor="engine-nanobanana">Nano Banana Pro</Label>
                 </div>
+                <div className="flex items-center gap-2">
+                  <RadioGroupItem value="volcengine" id="engine-volcengine" />
+                  <Label htmlFor="engine-volcengine">火山引擎官方</Label>
+                </div>
               </RadioGroup>
             </div>
             <div className="space-y-2">
@@ -426,6 +431,14 @@ export default function Settings() {
                   <SelectItem value="nanobanana-pro">
                     Nano Banana Pro
                   </SelectItem>
+                  <SelectItem value="flux-kontext-pro">
+                    Flux Kontext Pro (API易)
+                  </SelectItem>
+                  <SelectItem value="latentSync">
+                    LatentSync (火山引擎)
+                  </SelectItem>
+                  <SelectItem value="sdxl">SDXL (火山引擎)</SelectItem>
+                  <SelectItem value="ace">Ace (火山引擎)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -477,6 +490,130 @@ export default function Settings() {
                     set("generate_prompt_suffix", e.target.value)
                   }
                 />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ===== 4.5 火山引擎生图配置 ===== */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Image className="w-5 h-5" />
+              火山引擎生图配置
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-xs text-muted-foreground">
+              选择"火山引擎官方"生图引擎时，需要配置以下参数。直接调用火山引擎 AIGC API，不经过中转。
+            </p>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>AccessKeyId</Label>
+                <Input
+                  type="password"
+                  placeholder="火山引擎 AK..."
+                  value={cv(settings, "volcgen_access_key_id", "")}
+                  onChange={(e) => set("volcgen_access_key_id", e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>SecretAccessKey</Label>
+                <Input
+                  type="password"
+                  placeholder="火山引擎 SK..."
+                  value={cv(settings, "volcgen_secret_access_key", "")}
+                  onChange={(e) => set("volcgen_secret_access_key", e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={testingVolcgen}
+                onClick={() => {
+                  const ak = settings.volcgen_access_key_id ?? "";
+                  const sk = settings.volcgen_secret_access_key ?? "";
+                  const combined = ak && sk ? `${ak}:${sk}` : "";
+                  testConnection("volcgen", combined, setTestingVolcgen);
+                }}
+              >
+                {testingVolcgen ? (
+                  <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                ) : (
+                  <Plug className="w-4 h-4 mr-1" />
+                )}
+                测试连接
+              </Button>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>区域</Label>
+                <Select
+                  value={cv(settings, "volcgen_region", "cn-north-1")}
+                  onValueChange={(v) => set("volcgen_region", v)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="cn-north-1">cn-north-1</SelectItem>
+                    <SelectItem value="ap-singapore-1">ap-singapore-1</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>模型</Label>
+                <Select
+                  value={cv(settings, "volcgen_model", "latentSync")}
+                  onValueChange={(v) => set("volcgen_model", v)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="latentSync">LatentSync (推荐写真)</SelectItem>
+                    <SelectItem value="sdxl">SDXL</SelectItem>
+                    <SelectItem value="ace">Ace</SelectItem>
+                    <SelectItem value="wd_v1.4">WD 1.4</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label>图生图强度: {cv(settings, "volcgen_strength", "0.7")}</Label>
+                <Slider
+                  value={[Number(cv(settings, "volcgen_strength", "0.7"))]}
+                  onValueChange={([v]) => set("volcgen_strength", String(v))}
+                  min={0.1}
+                  max={1.0}
+                  step={0.1}
+                />
+                <p className="text-xs text-muted-foreground">越大越像参考图</p>
+              </div>
+              <div className="space-y-2">
+                <Label>生成步数: {cv(settings, "volcgen_steps", "30")}</Label>
+                <Slider
+                  value={[Number(cv(settings, "volcgen_steps", "30"))]}
+                  onValueChange={([v]) => set("volcgen_steps", String(v))}
+                  min={10}
+                  max={50}
+                  step={5}
+                />
+                <p className="text-xs text-muted-foreground">步数越多质量越好</p>
+              </div>
+              <div className="space-y-2">
+                <Label>提示词相关度: {cv(settings, "volcgen_cfg_scale", "7.5")}</Label>
+                <Slider
+                  value={[Number(cv(settings, "volcgen_cfg_scale", "7.5"))]}
+                  onValueChange={([v]) => set("volcgen_cfg_scale", String(v))}
+                  min={1}
+                  max={20}
+                  step={0.5}
+                />
+                <p className="text-xs text-muted-foreground">越高越遵循提示词</p>
               </div>
             </div>
           </CardContent>
