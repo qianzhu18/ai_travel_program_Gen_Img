@@ -27,6 +27,8 @@ AI 图片批量生成系统（Windows / Mac / Linux 一键启动说明）
 - Windows 停止：双击 `stop_docker.cmd`
 - Mac/Linux 启动：`./start_docker.sh`
 - Mac/Linux 停止：`./stop_docker.sh`
+- macOS 双击启动（Finder）：`start_docker.command`
+- macOS 双击停止（Finder）：`stop_docker.command`
 - 启动后访问：
   - 前端: `http://localhost:3000`
   - 后端: `http://localhost:8000`
@@ -58,6 +60,11 @@ AI 图片批量生成系统（Windows / Mac / Linux 一键启动说明）
 9) 常见问题
 - 3000/8000 打不开：先执行停止脚本，再重新启动。
 - 提示缺少 Python/npm：先安装后重试。
+- Windows 报错 `文件名、目录名或卷标语法不正确`：
+  - 已在新版本脚本内增加路径兼容处理，请先 `git pull` 到最新 `main`。
+  - 确认在项目根目录执行（包含 `docker-compose.yml`）。
+  - 建议将项目放在简短目录（如 `C:\ai_travel_program_Gen_Img`）后重试。
+  - 命令行手动启动可用于排查：`docker compose up -d --build`
 - 生成失败但服务能打开：
   - 查看 `.runtime/logs/backend.log`
   - 重点关注：
