@@ -693,9 +693,17 @@ export const settingsApi = {
   },
 
   /** 测试 API 连接 */
-  testConnection(service: "bailian" | "apiyi", apiKey: string) {
+  testConnection(
+    service: "bailian" | "apiyi" | "ark",
+    apiKey: string,
+    model?: string,
+  ) {
     return unwrap<{ connected: boolean }>(
-      http.post(API.settings.testConnection, { service, api_key: apiKey }),
+      http.post(API.settings.testConnection, {
+        service,
+        api_key: apiKey,
+        ...(model ? { model } : {}),
+      }),
     );
   },
 };

@@ -4,6 +4,7 @@
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
+from app.core.settings_resolver import get_setting_value  # 向后兼容旧导入路径
 from app.models.database import Base, Settings
 
 # 创建数据库引擎
@@ -91,22 +92,17 @@ DEFAULT_SETTINGS = [
     ("prompt_api_key", "", "阿里百炼API Key"),
     ("prompt_system_prompt", "", "提示词生成系统Prompt"),
     # 配置项4：图片生成引擎配置
-    ("generate_engine", "seedream", "图片生成引擎(seedream/nanobanana/volcengine)"),
+    ("generate_engine", "ark", "图片生成引擎（固定 ark，即梦图文生图）"),
     ("apiyi_api_key", "", "API易平台统一API Key（SeedDream 4.5 + Nano Banana Pro）"),
-    ("generate_model_version", "flux-kontext-pro", "模型版本（API易: flux-kontext-pro/seedream-4-5-251128, 火山引擎: latentSync/sdxl/ace）"),
+    ("generate_model_version", "flux-kontext-pro", "模型版本（历史兼容项，Ark 固定模型时不生效）"),
     ("disable_generation_watermark", "1", "关闭生图水印(1=关闭/0=保留)"),
     ("strict_no_watermark", "1", "强制无水印校验(1=开启，失败则整张判失败)"),
     ("strict_reference_mode", "1", "严格参考底图模式(1=开启，禁止回退为文生图)"),
     ("generate_prompt_prefix", "", "默认提示词前缀"),
     ("generate_prompt_suffix", "", "默认提示词后缀"),
-    # 火山引擎生图配置（直接调用火山引擎官方API）
-    ("volcgen_access_key_id", "", "火山引擎生图 AccessKeyId"),
-    ("volcgen_secret_access_key", "", "火山引擎生图 SecretAccessKey"),
-    ("volcgen_region", "cn-north-1", "火山引擎生图区域"),
-    ("volcgen_model", "latentSync", "火山引擎生图模型(latentSync/sdxl/ace)"),
-    ("volcgen_strength", "0.7", "火山引擎图生图强度(0.1-1.0)"),
-    ("volcgen_steps", "30", "火山引擎生图步数(10-50)"),
-    ("volcgen_cfg_scale", "7.5", "火山引擎提示词相关度(1-20)"),
+    # 即梦 Ark API 图文生图配置（火山方舟）
+    ("ark_api_key", "", "即梦 Ark API Key (Authorization: Bearer)"),
+    ("ark_model", "doubao-seedream-4-5-251128", "即梦 Ark 模型ID（需为账号已开通模型）"),
     # 配置项5：宽脸版本生成配置
     ("wideface_engine", "nanobanana", "宽脸生成引擎(nanobanana/seedream)"),
     ("wideface_prompt", "", "宽脸生成提示词"),
@@ -124,12 +120,26 @@ DEFAULT_SETTINGS = [
 
 def seed_default_settings():
     """插入默认系统配置（幂等，已存在的不覆盖）"""
+    forced_values = {
+        "generate_engine": "ark",
+    }
     db = SessionLocal()
     try:
         for key, value, description in DEFAULT_SETTINGS:
             existing = db.query(Settings).filter(Settings.key == key).first()
             if not existing:
                 db.add(Settings(key=key, value=value, description=description))
+            elif key in forced_values and existing.value != forced_values[key]:
+                existing.value = forced_values[key]
+                if description:
+                    existing.description = description
+            elif key == "ark_model":
+                # 兼容历史固定值，升级到当前可配置默认模型ID
+                legacy = {"", "doubao-seedream-4.5", "seedream-4.5"}
+                if (existing.value or "").strip() in legacy:
+                    existing.value = value
+                    if description:
+                        existing.description = description
         db.commit()
     finally:
         db.close()

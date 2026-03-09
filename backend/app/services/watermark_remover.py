@@ -322,9 +322,14 @@ class WatermarkRemover:
                 if not self._volc_client:
                     logger.error("Volcengine client not initialized")
                 else:
-                    result = await self._volc_client.inpaint(image, mask)
-                    if result is None and self._volc_client.last_error:
-                        logger.error(f"Volcengine inpaint failed: {self._volc_client.last_error}")
+                    try:
+                        result = await self._volc_client.inpaint(image, mask)
+                        if result is None and self._volc_client.last_error:
+                            logger.error(f"Volcengine inpaint failed: {self._volc_client.last_error}")
+                    except Exception as e:
+                        # Volc 异常不应直接终止流程，允许回退到本地 OpenCV
+                        logger.error(f"Volcengine 去水印失败: {e}")
+                        result = None
             elif self.engine == "opencv":
                 result = self._opencv_inpaint(image, mask)
             else:
@@ -348,7 +353,10 @@ class WatermarkRemover:
 
             # 保存结果
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(output_path, result)
+            ok = cv2.imwrite(output_path, result)
+            if not ok:
+                logger.error(f"保存去水印结果失败: {output_path}")
+                return False
 
             logger.info(f"水印去除成功: {input_path} -> {output_path}")
             return True

@@ -80,10 +80,16 @@ async def test_connection(request: TestConnectionRequest, db: Session = Depends(
     """测试 API Key 连通性"""
     service = request.service.lower()
     api_key = request.api_key
+    model = (request.model or "").strip()
 
     # 如果前端传来的是掩码值，从数据库读取已保存的明文 key
     if not api_key or api_key.startswith("****"):
-        key_field = "prompt_api_key" if service == "bailian" else "apiyi_api_key"
+        key_map = {
+            "bailian": "prompt_api_key",
+            "apiyi": "apiyi_api_key",
+            "ark": "ark_api_key",
+        }
+        key_field = key_map.get(service, "apiyi_api_key")
         row = db.query(Settings).filter(Settings.key == key_field).first()
         if row and row.value:
             api_key = decrypt_value(row.value)
@@ -91,7 +97,8 @@ async def test_connection(request: TestConnectionRequest, db: Session = Depends(
             return BaseResponse(code=1, message="请先输入并保存有效的 API Key")
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        timeout = 90.0 if service == "ark" else 15.0
+        async with httpx.AsyncClient(timeout=timeout) as client:
             if service == "bailian":
                 # 阿里百炼 - 调用 OpenAI 兼容的模型列表接口验证
                 resp = await client.get(
@@ -138,10 +145,92 @@ async def test_connection(request: TestConnectionRequest, db: Session = Depends(
                 return BaseResponse(code=1, message=f"API易平台认证失败 (HTTP {chat_resp.status_code})，请检查 API Key 是否正确",
                                     data={"connected": False})
 
+            elif service == "ark":
+                # 即梦 Ark 图文生图连通性验证（真实生图请求，单图输入单图输出）
+                if not model:
+                    row = db.query(Settings).filter(Settings.key == "ark_model").first()
+                    model = (row.value if row else "").strip() or "doubao-seedream-4-5-251128"
+
+                candidate_sizes = ["2K", "1K"] if "4-5" in model or "4.5" in model else ["1K", "2K"]
+                resp = None
+                used_size = ""
+                for size in candidate_sizes:
+                    payload = {
+                        "model": model,
+                        "prompt": "保持原图构图，进行轻微风格化处理（测试请求）。",
+                        "image": "https://ark-project.tos-cn-beijing.volces.com/doc_image/seedream4_imageToimage.png",
+                        "size": size,
+                        "watermark": False,
+                    }
+
+                    resp = await client.post(
+                        "https://ark.cn-beijing.volces.com/api/v3/images/generations",
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                    )
+                    used_size = size
+                    if resp.status_code == 200:
+                        break
+                    detail = (resp.text or "").lower()
+                    # 尺寸不支持时尝试下一个候选尺寸
+                    if resp.status_code in (400, 422) and "size" in detail and "not valid" in detail:
+                        continue
+                    break
+
+                if resp is not None and resp.status_code == 200:
+                    result = resp.json()
+                    images = result.get("data") or []
+                    image_url = ""
+                    if isinstance(images, list) and images and isinstance(images[0], dict):
+                        image_url = str(images[0].get("url") or "")
+                    return BaseResponse(
+                        code=0,
+                        message=f"即梦 Ark 可用（模型: {model}）",
+                        data={
+                            "connected": True,
+                            "model": model,
+                            "size": used_size,
+                            "image_url": image_url,
+                        },
+                    )
+
+                if resp is None:
+                    return BaseResponse(
+                        code=1,
+                        message="即梦 Ark 测试失败：未得到有效响应",
+                        data={"connected": False, "model": model},
+                    )
+
+                error_text = resp.text[:500]
+                error_code = ""
+                error_msg = error_text
+                try:
+                    error_payload = resp.json().get("error", {})
+                    error_code = str(error_payload.get("code") or "")
+                    error_msg = str(error_payload.get("message") or error_text)
+                except Exception:
+                    pass
+
+                msg = f"即梦 Ark 测试失败 (HTTP {resp.status_code})"
+                if error_code:
+                    msg += f" [{error_code}]"
+                msg += f": {error_msg[:180]}"
+                return BaseResponse(
+                    code=1,
+                    message=msg,
+                    data={
+                        "connected": False,
+                        "model": model,
+                        "status_code": resp.status_code,
+                        "error_code": error_code,
+                    },
+                )
+
             elif service == "volcgen":
                 # 火山引擎生图 - 测试 AK/SK 是否有效
-                from app.core.encryption import decrypt_value
-
                 ak_key = "volcgen_access_key_id"
                 sk_key = "volcgen_secret_access_key"
 

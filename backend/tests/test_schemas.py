@@ -268,6 +268,15 @@ class TestConnectionRequestSchema:
         req = TestConnectionRequest(service="bailian", api_key="sk-xxx")
         assert req.service == "bailian"
 
+    def test_valid_ark(self):
+        req = TestConnectionRequest(
+            service="ark",
+            api_key="ak-xxx",
+            model="doubao-seedream-4-5-251128",
+        )
+        assert req.service == "ark"
+        assert req.model == "doubao-seedream-4-5-251128"
+
     def test_invalid_service(self):
         with pytest.raises(ValidationError):
             TestConnectionRequest(service="openai", api_key="sk-xxx")

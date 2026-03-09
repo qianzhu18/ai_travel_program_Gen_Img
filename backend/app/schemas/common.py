@@ -13,7 +13,7 @@ _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-
 _VALID_CROWD_IDS = {f"C{i:02d}" for i in range(1, 20)}
 
 # 合法引擎名
-_VALID_ENGINES = {"seedream", "nanobanana"}
+_VALID_ENGINES = {"seedream", "nanobanana", "ark"}
 
 
 def _check_uuid(v: str, label: str = "ID") -> str:
@@ -213,7 +213,7 @@ class PromptResponse(BaseModel):
 class GenerateRequest(BaseModel):
     """生图请求"""
     batch_id: str
-    engine: Optional[str] = Field(None, description="AI引擎: seedream 或 nanobanana")
+    engine: Optional[str] = Field(None, description="AI引擎: ark（当前固定）")
 
     @field_validator("batch_id")
     @classmethod
@@ -318,7 +318,7 @@ class BatchDownloadRequest(BaseModel):
 class WideFaceGenerateRequest(BaseModel):
     """宽脸图生成请求"""
     template_ids: List[str] = Field(..., min_length=1, max_length=500, description="模板ID列表")
-    engine: Optional[str] = Field(None, description="生成引擎: seedream 或 nanobanana")
+    engine: Optional[str] = Field(None, description="生成引擎: seedream/nanobanana/ark")
 
     @field_validator("template_ids")
     @classmethod
@@ -389,8 +389,9 @@ class SettingBatchUpdateRequest(BaseModel):
 
 class TestConnectionRequest(BaseModel):
     """API 连接测试请求"""
-    service: Literal["bailian", "apiyi"] = Field(..., description="服务名称")
+    service: Literal["bailian", "apiyi", "ark"] = Field(..., description="服务名称")
     api_key: str = Field(..., min_length=1, max_length=500, description="API Key")
+    model: Optional[str] = Field(None, max_length=120, description="模型ID（ark 测试时可选）")
 
 
 # ===== 通用响应 =====

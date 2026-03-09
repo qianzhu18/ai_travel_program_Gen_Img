@@ -1,4 +1,4 @@
-AI 图片批量生成系统（Windows / Mac 一键启动说明）
+AI 图片批量生成系统（Windows / Mac / Linux 一键启动说明）
 
 目标：把整个项目文件夹发给别人后，对方只要准备好环境，结合 `可行性分析/AccessKey.txt` 就能一键启动。
 
@@ -10,8 +10,8 @@ AI 图片批量生成系统（Windows / Mac 一键启动说明）
   - `.env.example`
 
 2) 运行前准备
-- Windows：安装 Python 3.10+、Node.js 18+（LTS）。
-- Mac：安装 Python 3.10+、Node.js 18+（LTS）。
+- 本地模式：Windows 安装 Python 3.10+、Node.js 18+（LTS）；Mac/Linux 同理。
+- Docker 模式（推荐跨环境）：安装 Docker Desktop（或 Docker Engine + Docker Compose）。
 
 3) 密钥自动注入（已内置）
 - 启动脚本会自动执行：`scripts/apply_access_keys.py`
@@ -22,7 +22,16 @@ AI 图片批量生成系统（Windows / Mac 一键启动说明）
   - `VOLC_ACCESS_KEY_ID`
   - `VOLC_SECRET_ACCESS_KEY`
 
-4) Windows 一键启动/停止
+4) Docker 一键部署（跨环境推荐）
+- Windows 启动：双击 `start_docker.cmd`
+- Windows 停止：双击 `stop_docker.cmd`
+- Mac/Linux 启动：`./start_docker.sh`
+- Mac/Linux 停止：`./stop_docker.sh`
+- 启动后访问：
+  - 前端: `http://localhost:3000`
+  - 后端: `http://localhost:8000`
+
+5) Windows 本地一键启动/停止（不使用 Docker）
 - 启动：双击 `start_local.cmd`
 - 停止：双击 `stop_local.cmd`
 - 首次启动会自动安装依赖，耗时较长属正常
@@ -30,15 +39,23 @@ AI 图片批量生成系统（Windows / Mac 一键启动说明）
   - 前端: `http://localhost:3000`
   - 后端: `http://localhost:8000`
 
-5) Mac 一键启动/停止
+6) Mac/Linux 本地一键启动/停止（不使用 Docker）
 - 启动：`./start_local.sh`
 - 停止：`./stop_local.sh`
 
-6) 推荐给 AI 的一句话（给不会配环境的人）
-- 可直接把下面这句发给 AI（如 ChatGPT/Codex）：
-  - `请进入项目根目录，检查可行性分析/AccessKey.txt，自动写入 .env，然后执行一键启动脚本并检查 localhost:3000 和 localhost:8000 是否可用。`
+7) Docker 一键更新（新电脑部署/拉取最新版本）
+- Linux/macOS：
+  - `git checkout main && git pull origin main && ./start_docker.sh`
+- Windows：
+  - `git checkout main`
+  - `git pull origin main`
+  - 双击 `start_docker.cmd`
 
-7) 常见问题
+8) 推荐给 AI 的一句话（给不会配环境的人）
+- 可直接把下面这句发给 AI（如 ChatGPT/Codex）：
+  - `请进入项目根目录，先用 Docker 一键启动（Windows 用 start_docker.cmd，Mac/Linux 用 start_docker.sh），并检查 localhost:3000 和 localhost:8000 是否可用。`
+
+9) 常见问题
 - 3000/8000 打不开：先执行停止脚本，再重新启动。
 - 提示缺少 Python/npm：先安装后重试。
 - 生成失败但服务能打开：

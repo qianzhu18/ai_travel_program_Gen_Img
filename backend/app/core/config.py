@@ -113,8 +113,8 @@ class Settings(BaseSettings):
     BAILIAN_API_KEY: str = ""
     BAILIAN_API_URL: str = "https://dashscope.aliyuncs.com/api/v1"
 
-    # 生图引擎选择 (seedream / nanobanana)
-    IMAGE_GENERATION_ENGINE: str = "seedream"
+    # 生图引擎选择（当前固定 Ark 图文生图）
+    IMAGE_GENERATION_ENGINE: str = "ark"
 
     # 宽脸图生成引擎选择 (seedream / nanobanana)
     WIDEFACE_GENERATION_ENGINE: str = "nanobanana"

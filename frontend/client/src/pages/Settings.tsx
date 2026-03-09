@@ -14,7 +14,6 @@ import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { toast } from "sonner";
 import {
   Save,
@@ -47,8 +46,7 @@ export default function Settings() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testingBailian, setTestingBailian] = useState(false);
-  const [testingApiyi, setTestingApiyi] = useState(false);
-  const [testingVolcgen, setTestingVolcgen] = useState(false);
+  const [testingArk, setTestingArk] = useState(false);
 
   // fetch settings on mount
   const fetchSettings = useCallback(async () => {
@@ -81,7 +79,14 @@ export default function Settings() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      const settingsArr = Object.entries(settings).map(([key, value]) => ({
+      const arkModel =
+        (settings.ark_model ?? "").trim() || "doubao-seedream-4-5-251128";
+      const normalized: SettingsData = {
+        ...settings,
+        generate_engine: "ark",
+        ark_model: arkModel,
+      };
+      const settingsArr = Object.entries(normalized).map(([key, value]) => ({
         key,
         value: String(value),
       }));
@@ -96,12 +101,18 @@ export default function Settings() {
 
   // test connection
   const testConnection = async (
-    service: "bailian" | "apiyi" | "volcgen",
+    service: "bailian" | "apiyi" | "ark",
     apiKey: string,
     setTesting: (v: boolean) => void,
+    model?: string,
   ) => {
     if (!apiKey) {
       toast.warning("请先输入有效的 API Key");
+      return;
+    }
+    const modelText = (model ?? "").trim();
+    if (service === "ark" && !modelText) {
+      toast.warning("请先填写可用的 Ark 模型 ID");
       return;
     }
     setTesting(true);
@@ -109,9 +120,10 @@ export default function Settings() {
       const res = await axios.post(API.settings.testConnection, {
         service,
         api_key: apiKey,
+        ...(modelText ? { model: modelText } : {}),
       });
       if (res.data?.data?.connected) {
-        toast.success("连接成功");
+        toast.success(res.data?.message ?? "连接成功");
       } else {
         toast.error(res.data?.message ?? "连接失败");
       }
@@ -358,95 +370,15 @@ export default function Settings() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label>生成引擎</Label>
-              <RadioGroup
-                value={cv(settings, "generate_engine", "seedream")}
-                onValueChange={(v) => set("generate_engine", v)}
-                className="flex gap-4"
-              >
-                <div className="flex items-center gap-2">
-                  <RadioGroupItem value="seedream" id="engine-seedream" />
-                  <Label htmlFor="engine-seedream">SeedDream 4.5</Label>
-                </div>
-                <div className="flex items-center gap-2">
-                  <RadioGroupItem value="nanobanana" id="engine-nanobanana" />
-                  <Label htmlFor="engine-nanobanana">Nano Banana Pro</Label>
-                </div>
-                <div className="flex items-center gap-2">
-                  <RadioGroupItem value="volcengine" id="engine-volcengine" />
-                  <Label htmlFor="engine-volcengine">火山引擎官方</Label>
-                </div>
-              </RadioGroup>
-            </div>
-            <div className="space-y-2">
-              <Label>API易平台 API Key</Label>
-              <div className="flex gap-2">
-                <Input
-                  type="password"
-                  placeholder="输入 API易平台统一密钥"
-                  value={cv(settings, "apiyi_api_key", "")}
-                  onChange={(e) => set("apiyi_api_key", e.target.value)}
-                  className="flex-1"
-                />
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={testingApiyi}
-                  onClick={() =>
-                    testConnection(
-                      "apiyi",
-                      settings.apiyi_api_key ?? "",
-                      setTestingApiyi,
-                    )
-                  }
-                >
-                  {testingApiyi ? (
-                    <Loader2 className="w-4 h-4 mr-1 animate-spin" />
-                  ) : (
-                    <Plug className="w-4 h-4 mr-1" />
-                  )}
-                  测试连接
-                </Button>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label>模型版本</Label>
-              <Select
-                value={cv(
-                  settings,
-                  "generate_model_version",
-                  "seedream-4-5-251128",
-                )}
-                onValueChange={(v) => set("generate_model_version", v)}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="seedream-4-5-251128">
-                    SeedDream 4.5 (251128)
-                  </SelectItem>
-                  <SelectItem value="seedream-3-0">SeedDream 3.0</SelectItem>
-                  <SelectItem value="nanobanana-pro">
-                    Nano Banana Pro
-                  </SelectItem>
-                  <SelectItem value="flux-kontext-pro">
-                    Flux Kontext Pro (API易)
-                  </SelectItem>
-                  <SelectItem value="latentSync">
-                    LatentSync (火山引擎)
-                  </SelectItem>
-                  <SelectItem value="sdxl">SDXL (火山引擎)</SelectItem>
-                  <SelectItem value="ace">Ace (火山引擎)</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+            <p className="text-xs text-muted-foreground">
+              当前生图链路固定为：即梦 Ark 图文生图（单图输入单图输出）。
+              实际使用模型取决于下方 `ark_model` 配置项（需为账号已开通模型）。
+            </p>
             <div className="flex items-center justify-between rounded-md border p-3">
               <div className="space-y-1">
                 <Label>关闭生图水印</Label>
                 <p className="text-xs text-muted-foreground">
-                  开启后会向 SeedDream / Nano Banana 请求 `watermark=false` 及 `logo_info.add_logo=false`
+                  开启后会向即梦 Ark 请求 `watermark=false`
                 </p>
               </div>
               <Switch
@@ -467,7 +399,7 @@ export default function Settings() {
               />
             </div>
             <p className="text-xs text-muted-foreground">
-              若模板页仍出现右下角 “AI generated”，通常不是余额问题，而是上游模型渠道强制角标或去水印引擎不可用。
+              若模板页仍出现右下角 “AI generated”，通常是上游角标或去水印引擎不可用导致。
               建议同时开启“关闭生图水印 + 强制无水印兜底”，并确保去水印引擎可用。
             </p>
             <div className="grid grid-cols-2 gap-4">
@@ -495,126 +427,63 @@ export default function Settings() {
           </CardContent>
         </Card>
 
-        {/* ===== 4.5 火山引擎生图配置 ===== */}
+        {/* ===== 4.5 即梦 Ark API 配置 ===== */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Image className="w-5 h-5" />
-              火山引擎生图配置
+              即梦 Ark API 配置
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <p className="text-xs text-muted-foreground">
-              选择"火山引擎官方"生图引擎时，需要配置以下参数。直接调用火山引擎 AIGC API，不经过中转。
+              使用即梦 Ark API 进行图文生图（单图输入单图输出）。支持图像元素增删、风格转化、材质替换、色调迁移、改变背景/视角/尺寸等。
             </p>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>AccessKeyId</Label>
+            <div className="space-y-2">
+              <Label>即梦 Ark API Key</Label>
+              <div className="flex gap-2">
                 <Input
                   type="password"
-                  placeholder="火山引擎 AK..."
-                  value={cv(settings, "volcgen_access_key_id", "")}
-                  onChange={(e) => set("volcgen_access_key_id", e.target.value)}
+                  placeholder="Bearer Token..."
+                  value={cv(settings, "ark_api_key", "")}
+                  onChange={(e) => set("ark_api_key", e.target.value)}
+                  className="flex-1"
                 />
-              </div>
-              <div className="space-y-2">
-                <Label>SecretAccessKey</Label>
-                <Input
-                  type="password"
-                  placeholder="火山引擎 SK..."
-                  value={cv(settings, "volcgen_secret_access_key", "")}
-                  onChange={(e) => set("volcgen_secret_access_key", e.target.value)}
-                />
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={testingVolcgen}
-                onClick={() => {
-                  const ak = settings.volcgen_access_key_id ?? "";
-                  const sk = settings.volcgen_secret_access_key ?? "";
-                  const combined = ak && sk ? `${ak}:${sk}` : "";
-                  testConnection("volcgen", combined, setTestingVolcgen);
-                }}
-              >
-                {testingVolcgen ? (
-                  <Loader2 className="w-4 h-4 mr-1 animate-spin" />
-                ) : (
-                  <Plug className="w-4 h-4 mr-1" />
-                )}
-                测试连接
-              </Button>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>区域</Label>
-                <Select
-                  value={cv(settings, "volcgen_region", "cn-north-1")}
-                  onValueChange={(v) => set("volcgen_region", v)}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={testingArk}
+                  onClick={() =>
+                    testConnection(
+                      "ark",
+                      settings.ark_api_key ?? "",
+                      setTestingArk,
+                      settings.ark_model ?? "doubao-seedream-4-5-251128",
+                    )
+                  }
                 >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="cn-north-1">cn-north-1</SelectItem>
-                    <SelectItem value="ap-singapore-1">ap-singapore-1</SelectItem>
-                  </SelectContent>
-                </Select>
+                  {testingArk ? (
+                    <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                  ) : (
+                    <Plug className="w-4 h-4 mr-1" />
+                  )}
+                  验证可用性
+                </Button>
               </div>
-              <div className="space-y-2">
-                <Label>模型</Label>
-                <Select
-                  value={cv(settings, "volcgen_model", "latentSync")}
-                  onValueChange={(v) => set("volcgen_model", v)}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="latentSync">LatentSync (推荐写真)</SelectItem>
-                    <SelectItem value="sdxl">SDXL</SelectItem>
-                    <SelectItem value="ace">Ace</SelectItem>
-                    <SelectItem value="wd_v1.4">WD 1.4</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              <p className="text-xs text-muted-foreground">
+                格式: Bearer Token（从火山方舟控制台获取）
+              </p>
             </div>
-            <div className="grid grid-cols-3 gap-4">
-              <div className="space-y-2">
-                <Label>图生图强度: {cv(settings, "volcgen_strength", "0.7")}</Label>
-                <Slider
-                  value={[Number(cv(settings, "volcgen_strength", "0.7"))]}
-                  onValueChange={([v]) => set("volcgen_strength", String(v))}
-                  min={0.1}
-                  max={1.0}
-                  step={0.1}
-                />
-                <p className="text-xs text-muted-foreground">越大越像参考图</p>
-              </div>
-              <div className="space-y-2">
-                <Label>生成步数: {cv(settings, "volcgen_steps", "30")}</Label>
-                <Slider
-                  value={[Number(cv(settings, "volcgen_steps", "30"))]}
-                  onValueChange={([v]) => set("volcgen_steps", String(v))}
-                  min={10}
-                  max={50}
-                  step={5}
-                />
-                <p className="text-xs text-muted-foreground">步数越多质量越好</p>
-              </div>
-              <div className="space-y-2">
-                <Label>提示词相关度: {cv(settings, "volcgen_cfg_scale", "7.5")}</Label>
-                <Slider
-                  value={[Number(cv(settings, "volcgen_cfg_scale", "7.5"))]}
-                  onValueChange={([v]) => set("volcgen_cfg_scale", String(v))}
-                  min={1}
-                  max={20}
-                  step={0.5}
-                />
-                <p className="text-xs text-muted-foreground">越高越遵循提示词</p>
-              </div>
+            <div className="space-y-2">
+              <Label>模型 ID（ark_model）</Label>
+              <Input
+                placeholder="例如：doubao-seedream-4-5-251128"
+                value={cv(settings, "ark_model", "doubao-seedream-4-5-251128")}
+                onChange={(e) => set("ark_model", e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                请填写当前账号已开通的模型 ID。点击“验证可用性”可实时检测。
+              </p>
             </div>
           </CardContent>
         </Card>

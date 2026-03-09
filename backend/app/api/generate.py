@@ -199,6 +199,7 @@ async def _async_batch_generate(batch_id: str, engine: str):
         from app.services.image_generator import ConcurrentImageGenerator
 
         api_key = get_setting_value(db, "apiyi_api_key", "") or settings.APIYI_API_KEY
+        ark_api_key = get_setting_value(db, "ark_api_key", "")
         seedream_model = get_setting_value(db, "generate_model_version", "seedream-4-5-251128")
         nanobanana_model = get_setting_value(db, "nanobanana_model_version", "nano-banana-pro")
         disable_generation_watermark = (
@@ -217,6 +218,15 @@ async def _async_batch_generate(batch_id: str, engine: str):
         volc_secret_access_key = (
             get_setting_value(db, "volc_secret_access_key", "") or settings.VOLC_SECRET_ACCESS_KEY
         )
+
+        requested_engine = (engine or "").strip().lower()
+        if requested_engine not in {"ark", "ark_api", "jimeng", "即梦"}:
+            logger.info("批量生图引擎已强制切换为即梦 Ark（忽略请求引擎: %s）", engine)
+        engine = "ark"
+
+        if not ark_api_key:
+            ps.fail(TASK_TYPE, batch_id, "即梦 Ark API Key 未配置，请先在系统设置中填写 ark_api_key")
+            return
 
         # 查询所有待生成任务
         tasks = db.query(GenerateTask).join(BaseImage).filter(
@@ -488,7 +498,7 @@ async def _async_batch_generate(batch_id: str, engine: str):
 async def start_generation(request: GenerateRequest, db: Session = Depends(get_db)):
     """
     开始批量生图任务（异步后台）
-    - 并发调用 SeedDream 4.5 / Nano Banana Pro
+    - 并发调用即梦 Ark 图文生图（单图输入单图输出）
     - 智能并发控制 (10-50线程)
     - 失败自动重试2次
     """
@@ -510,11 +520,9 @@ async def start_generation(request: GenerateRequest, db: Session = Depends(get_d
     if pending == 0:
         return BaseResponse(code=1, message="没有待生成的任务，请先生成提示词")
 
-    engine = (
-        request.engine
-        or get_setting_value(db, "generate_engine", settings.IMAGE_GENERATION_ENGINE)
-        or settings.IMAGE_GENERATION_ENGINE
-    )
+    if request.engine and request.engine not in {"ark", "ark_api", "jimeng", "即梦"}:
+        logger.info("start_generation 忽略非 Ark 引擎请求: %s", request.engine)
+    engine = "ark"
 
     t = threading.Thread(
         target=_run_generate_background,
@@ -565,11 +573,9 @@ async def retry_failed(request: GenerateRequest, db: Session = Depends(get_db)):
         t.status = "pending"
     db.commit()
 
-    engine = (
-        request.engine
-        or get_setting_value(db, "generate_engine", settings.IMAGE_GENERATION_ENGINE)
-        or settings.IMAGE_GENERATION_ENGINE
-    )
+    if request.engine and request.engine not in {"ark", "ark_api", "jimeng", "即梦"}:
+        logger.info("retry_failed 忽略非 Ark 引擎请求: %s", request.engine)
+    engine = "ark"
 
     t = threading.Thread(
         target=_run_generate_background,

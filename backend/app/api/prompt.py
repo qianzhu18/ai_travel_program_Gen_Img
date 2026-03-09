@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 TASK_TYPE = "prompt"
-VALID_ENGINES = {"seedream", "nanobanana"}
+VALID_ENGINES = {"seedream", "nanobanana", "ark"}
 
 
 class PromptBackupImportRequest(BaseModel):

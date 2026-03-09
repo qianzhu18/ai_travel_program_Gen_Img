@@ -1,9 +1,10 @@
 """
-图片生成服务 - 对接 API易平台 (SeedDream 4.5 / Nano Banana Pro)
+图片生成服务 - 对接 API易平台 (SeedDream 4.5 / Nano Banana Pro)、即梦 Ark API
 
 支持:
-- SeedDream 4.5: 高质量人物写真生成
-- Nano Banana Pro: 快速风格化生成
+- SeedDream 4.5: 高质量人物写真生成（API易平台）
+- Nano Banana Pro: 快速风格化生成（API易平台）
+- 即梦 Ark API: 图文生图/图像编辑（火山方舟）
 - 智能并发控制 + 失败重试
 """
 import asyncio
@@ -34,7 +35,7 @@ def _normalize_watermark_engine(engine_name: str) -> str:
 
 
 class APIYiImageClient:
-    """API易平台图片生成客户端"""
+    """API易平台图片生成客户端 + 即梦 Ark API 支持"""
 
     def __init__(
         self,
@@ -44,6 +45,8 @@ class APIYiImageClient:
         nanobanana_model: str = "nano-banana-pro",
         disable_watermark: bool = True,
         strict_reference: bool = True,
+        ark_api_key: str = "",
+        ark_model: str = "doubao-seedream-4-5-251128",
     ):
         self.api_key = api_key or app_settings.APIYI_API_KEY
         self.api_url = (api_url or app_settings.APIYI_API_URL).rstrip("/")
@@ -56,6 +59,21 @@ class APIYiImageClient:
         self.strict_reference = bool(strict_reference)
         self.last_error_code = ""
         self.last_error_message = ""
+
+        # 即梦 Ark API 配置
+        self.ark_api_key = ark_api_key
+        self.ark_model = (ark_model or "doubao-seedream-4-5-251128").strip()
+        self._ark_client = None
+
+    def _get_ark_client(self):
+        """延迟加载 Ark 客户端"""
+        if self._ark_client is None and self.ark_api_key:
+            from app.services.ark_image_gen import ArkImageClient
+            self._ark_client = ArkImageClient(
+                api_key=self.ark_api_key,
+                model=self.ark_model,
+            )
+        return self._ark_client
 
     def _reset_last_error(self):
         self.last_error_code = ""
@@ -166,14 +184,12 @@ class APIYiImageClient:
         Returns:
             是否成功
         """
-        if not self.api_key:
-            raise ValueError("API易 API Key 未配置")
         self._reset_last_error()
+        engine_name = (engine or "").strip().lower()
 
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
+        # Ark 图文生图走独立链路，不依赖 API易 Key
+        if engine_name in ("ark", "ark_api", "jimeng", "即梦"):
+            return await self._generate_ark(prompt, reference_image_path, output_path)
 
         # 读取并压缩参考图片
         ref_b64 = self._load_reference_base64(reference_image_path)
@@ -191,7 +207,21 @@ class APIYiImageClient:
             logger.error("严格参考模式下缺少可用参考图，拒绝回退为文生图")
             return False
 
-        if engine == "seedream":
+        if engine_name in ("volcengine", "volcgen", "volc"):
+            # 火山引擎生图（直接调用官方 API）
+            return await self._generate_volcengine(
+                prompt, negative_prompt, ref_b64, reference_weight, output_path
+            )
+
+        if not self.api_key:
+            raise ValueError("API易 API Key 未配置")
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        if engine_name == "seedream":
             ok = await self._generate_seedream(
                 headers, prompt, negative_prompt, ref_b64, reference_weight, output_path
             )
@@ -209,14 +239,9 @@ class APIYiImageClient:
                     headers, prompt, negative_prompt, ref_b64, reference_weight, output_path
                 )
             return False
-        elif engine == "nanobanana":
+        elif engine_name == "nanobanana":
             return await self._generate_nanobanana(
                 headers, prompt, negative_prompt, ref_b64, reference_weight, output_path
-            )
-        elif engine in ("volcengine", "volcgen", "volc"):
-            # 火山引擎生图（直接调用官方 API）
-            return await self._generate_volcengine(
-                prompt, negative_prompt, ref_b64, reference_weight, output_path
             )
         else:
             raise ValueError(f"不支持的引擎: {engine}")
@@ -305,7 +330,8 @@ class APIYiImageClient:
         output_path: str,
     ) -> bool:
         """火山引擎生图（直接调用官方 API）"""
-        from app.core.database import get_setting_value, SessionLocal
+        from app.core.database import SessionLocal
+        from app.core.settings_resolver import get_setting_value
         from app.services.volc_image_gen import VolcImageGenClient
 
         db = SessionLocal()
@@ -412,6 +438,108 @@ class APIYiImageClient:
             logger.error(f"火山引擎生图异常: {e}")
             self._record_error(500, str(e))
             self.last_error_code = "volc_exception"
+            self.last_error_message = str(e)
+            return False
+
+    async def _generate_ark(
+        self,
+        prompt: str,
+        reference_image_path: str,
+        output_path: str,
+    ) -> bool:
+        """
+        即梦 Ark API 图文生图（单图输入单图输出）
+
+        基于已有图片，结合文字指令进行图像编辑：
+        - 图像元素增删
+        - 风格转化
+        - 材质替换
+        - 色调迁移
+        - 改变背景/视角/尺寸
+        """
+        from app.core.database import SessionLocal
+        from app.core.settings_resolver import get_setting_value
+
+        db = SessionLocal()
+        try:
+            # 从数据库获取 Ark API Key
+            ark_api_key = get_setting_value(db, "ark_api_key", "")
+            ark_model = (
+                get_setting_value(db, "ark_model", self.ark_model or "doubao-seedream-4-5-251128")
+                .strip()
+            )
+
+            # 如果数据库中没有配置，使用实例配置
+            if not ark_api_key:
+                ark_api_key = self.ark_api_key
+            if not ark_model:
+                ark_model = self.ark_model or "doubao-seedream-4-5-251128"
+
+            if not ark_api_key:
+                self._record_error(401, "即梦 Ark API Key 未配置")
+                self.last_error_code = "ark_missing_api_key"
+                self.last_error_message = "请先在系统设置中配置即梦 Ark API Key"
+                logger.error("即梦 Ark API Key 未配置")
+                return False
+
+            # 检查参考图是否存在
+            if not reference_image_path or not Path(reference_image_path).exists():
+                self._record_error(400, "参考图不存在")
+                self.last_error_code = "reference_image_missing"
+                self.last_error_message = "即梦 Ark API 需要输入图片进行图文生图"
+                logger.error(f"参考图不存在: {reference_image_path}")
+                return False
+
+            # 获取 Ark 客户端
+            ark_client = self._get_ark_client()
+            if not ark_client:
+                # 重新创建客户端
+                from app.services.ark_image_gen import ArkImageClient
+                ark_client = ArkImageClient(
+                    api_key=ark_api_key,
+                    model=ark_model,
+                )
+                self._ark_client = ark_client
+            else:
+                # 实时同步设置中的 key / model
+                ark_client.api_key = ark_api_key
+                ark_client.model = ark_client._normalize_model(ark_model)
+
+            self.ark_model = ark_client.model
+
+            logger.info("[即梦 Ark] model=%s, prompt=%s...", ark_client.model, prompt[:50])
+
+            # 调用 Ark API 图文生图
+            image_url = await ark_client.image_to_image(
+                prompt=prompt,
+                image_path=reference_image_path,
+            )
+
+            if not image_url:
+                self._record_error(500, ark_client.last_error or "即梦 Ark 生图失败")
+                self.last_error_code = ark_client.last_error_code or "ark_generation_failed"
+                self.last_error_message = ark_client.last_error or "即梦 Ark 生图失败"
+                logger.error(f"即梦 Ark 生图失败: {ark_client.last_error}")
+                return False
+
+            # 下载生成的图片
+            async with httpx.AsyncClient(timeout=60) as http_client:
+                img_resp = await http_client.get(image_url)
+                if img_resp.status_code != 200:
+                    self._record_error(img_resp.status_code, f"下载图片失败: HTTP {img_resp.status_code}")
+                    self.last_error_code = f"http_{img_resp.status_code}"
+                    return False
+
+                Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+                Path(output_path).write_bytes(img_resp.content)
+
+            logger.info(f"即梦 Ark 生图成功: {output_path}")
+            return True
+
+        except Exception as e:
+            logger.exception(f"即梦 Ark 生图异常: {e}")
+            self._record_error(500, str(e))
+            self.last_error_code = "ark_exception"
             self.last_error_message = str(e)
             return False
         finally:
